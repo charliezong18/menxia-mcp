@@ -235,14 +235,21 @@ By the way, a free benefit: pitfalls like macOS bash 3.2 lacking `mapfile` and a
 
 ---
 
-## 7. Hook (Phase 0, does not depend on this repo)
+## 7. Hook (Phase 0, **shipped 2026-07-28**)
 
-PreToolUse on Bash, rejects on hit:
+`~/.claude/skills/review-loop/guard-pr-create.sh`, wired to `PreToolUse(Bash)` in the global settings.json. Rejects on hit:
 
-- `gh pr create` and the target is `charliezong18/review`
-- Directly `gh api -X POST .../repos/charliezong18/review/pulls`
+- `gh pr create` aimed at the folder repo
+- `gh api -X POST .../pulls`, likewise
 
-The rejection message points to the correct entrypoint at the time — in Phase 0 it points to `open-folder.sh`, after Phase 4 it will point to the MCP tool.
+Two criteria: **① a command segment names the folder repo; ② it does not, but the directory it `cd`s into (or the session cwd) has the folder repo as its origin** — the second blocks the most likely bypass, `cd <worktree> && gh pr create`. Read operations (`pr view` / `pr list` / GET pulls) and every other repo pass untouched.
+
+The rejection message points to the correct entrypoint at the time — currently `open-folder.sh`, after Phase 4 the MCP tool.
+
+**Two things learned the hard way, recorded so they are not repeated:**
+
+- **Judge per command segment, not per whole string.** The first version scanned the entire command line, so `gh pr create -R some-other-repo && gh pr view -R <folder repo>` was falsely blocked — the two keywords sat in different segments. Now the command is split on `&& || ; |` and each segment judged on its own.
+- **Side effect: any Bash command whose text contains the "create + folder repo" combination is blocked**, including test scripts and greps. That is the inherent cost of literal matching, and it will not be fixed — loosening it means loosening the gate. To test the guard, put the cases in a file and run `bash <file>`.
 
 This rule is independent of MCP; deploying it first yields immediate effects. It is the real answer to "more locked down"; MCP is just changing the vehicle, not a means to prevent bypassing.
 
@@ -252,7 +259,7 @@ This rule is independent of MCP; deploying it first yields immediate effects. It
 
 | Phase | Content | Why this sequence |
 |---|---|---|
-| **0** | Hook welds the route dead | Does not depend on MCP, yields immediate effects |
+| **0** ✅ | Hook welds the route dead (shipped 2026-07-28, see §7) | Does not depend on MCP, yields immediate effects |
 | **1** | server skeleton + `list_folders` + `read_comments` | **Read-only, zero risk**, the benefit of saving context is cashed in immediately |
 | **2** | `lint_folder` + §5.2 differential test alignment | The check logic must stand firm first, before daring to let it manage writing |
 | **3** | `open_folder` + `audit_folders` + `reply_comment` | Write side, including flock/worktree/marker self-verification |
