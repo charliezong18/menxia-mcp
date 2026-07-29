@@ -56,14 +56,9 @@ Six tools. Merging is deliberately not one of them — that is the human's click
 
 ## How it works
 
-```
-   agent ──open_folder──▶ ┌─────────────┐ ──PR──▶ review repo (private)
-                          │  zhupi-mcp  │                    │
-   agent ◀─read_comments─ └─────────────┘ ◀─annotations── you, in zhupi
-                                │
-                          flock + throwaway worktree
-                          (the agent never touches the repo directly)
-```
+![The review loop](assets/loop.png)
+
+The repo in the middle is the whole interface. Neither side calls the other; both talk to GitHub. That is why zhupi can be taken off at any time, and why this server can be swapped for a bash script without the human noticing.
 
 Node + TypeScript, stdio transport, installed by absolute path — no global npm state. GitHub auth is borrowed from `gh auth token` rather than managing a second PAT.
 

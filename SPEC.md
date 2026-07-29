@@ -66,6 +66,10 @@ Returns: PR number, PR URL, deep link to zhupi `https://charliezong18.github.io/
 
 The copy-in location is fixed: `docs` land in `docs/<basename>`, `assets` land in `docs/assets/<basename>` — the text references them by relative paths beginning with `assets/`, consistent with the existing in-repo layout.
 
+![open_folder and its failure branches](assets/open-folder.png)
+
+The three amber boxes are deliberately non-blocking: a stale branch base only warns (blocking pushes people into bypassing the gate), an undetected session id embeds nothing (never fabricate one), and a failed body readback still returns (the PR exists either way; hiding that is worse). Only the two red boxes actually abort.
+
 ### 3.2 `lint_folder` — self-check before you open a folder
 
 ```
@@ -150,6 +154,8 @@ The folder repo (default `charliezong18/review`) and the local checkout path (de
 - Lock wait timeout returns a readable error, letting the caller know another session is opening a folder, rather than hanging dead
 
 `worktree.ts` is the **only** module that touches `~/Developer/review`.
+
+![How two sessions get serialized by the lock](assets/concurrency.png)
 
 ### 4.3 GitHub integration
 
@@ -253,6 +259,10 @@ The rejection message points to the correct entrypoint at the time — currently
 3. **The stripping sed must use `-E`.** BSD sed (shipped with macOS) does not support `\|` alternation in basic regex, so that rule was dead on arrival — the `bash -c '...'` wrapper bypass sailed straight through, **silently**. Only the test caught it. `folder-lint.sh` carries a comment warning about this exact class of trap, and it still happened.
 
 The accompanying `guard-pr-create.test.sh` has 21 cases (10 must-block / 11 must-pass). Run it before touching the guard.
+
+![The route guard's decision tree](assets/guard.png)
+
+Every step marked (1)(2)(3) was forced by a real false positive — **not one node in this tree was designed; all of them were collided with.**
 
 This rule is independent of MCP; deploying it first yields immediate effects. It is the real answer to "more locked down"; MCP is just changing the vehicle, not a means to prevent bypassing.
 

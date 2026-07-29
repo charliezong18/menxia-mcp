@@ -56,14 +56,9 @@
 
 ## 怎么工作
 
-```
-   agent ──open_folder──▶ ┌─────────────┐ ──PR──▶ 奏折仓（私有）
-                          │  zhupi-mcp  │                 │
-   agent ◀─read_comments─ └─────────────┘ ◀──批注──── 你，在朱批台上
-                                │
-                          flock + 用完即弃的 worktree
-                          （agent 全程不碰那个仓）
-```
+![循环全景](assets/loop.png)
+
+**正中间那个仓就是全部接口。** 两侧谁也不调谁，各自只跟 GitHub 说话。所以朱批台随时可以摘掉，而这个 server 也可以换回 bash 脚本而人那边毫无察觉。
 
 Node + TypeScript，stdio transport，按绝对路径安装——不碰任何全局 npm 状态。GitHub 认证直接借 `gh auth token`，不另管一份 PAT。
 

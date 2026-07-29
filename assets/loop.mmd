@@ -1,0 +1,31 @@
+%% The review loop, end to end. Thick edges are the human's actions.
+%% Laid out top-to-bottom on purpose: a wide strip becomes illegible
+%% once a renderer scales it down to column width.
+flowchart TB
+    subgraph AG ["agent side"]
+        direction LR
+        A["AI agent"]
+        S["zhupi-mcp<br/>one process per session"]
+    end
+
+    R[("review repo<br/>private")]
+
+    subgraph HU ["human side"]
+        direction LR
+        Z["zhupi<br/>the annotation desk"]
+        D["delivered"]
+    end
+
+    A -->|"open_folder"| S
+    S -->|"opens PR"| R
+    R --> Z
+    Z ==>|"highlight a sentence,<br/>leave an annotation"| R
+    R -->|"read_comments"| S
+    S -->|"structured JSON<br/>answered computed server-side"| A
+    A -->|"reply_comment,<br/>revise and push"| S
+    Z ==>|"final approval<br/>squash merge"| D
+
+    classDef human fill:#c0392b,stroke:#7b241c,color:#fff
+    classDef srv fill:#2c3e50,stroke:#1b2631,color:#fff
+    class Z human
+    class S srv
