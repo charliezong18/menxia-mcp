@@ -9,6 +9,13 @@
 /** 允许出现 octokit.* 的唯一文件。 */
 export const OCTOKIT_ALLOWED_FILE = 'github.ts';
 
+// 注意分工：R7 的**执行机制**是 github.ts 里的运行时闸门（Octokit 实例封在闭包里 +
+// hook 断言 method === 'GET' + 剔除会覆盖动词的 params）。第一轮代码评审用本地 server
+// 实证了文本扫描做不到这件事——别名、模板 route、原生 fetch、node:https、git push
+// 全部能绕过，而本项目自己的写法（oc.request(route, params)）本来就在盲区里。
+// 所以本文件降级为**辅助 lint**：抓「不该出现在这里的网络出口」，作为第二道提示，
+// 不作为唯一防线。
+
 /** 扫描时跳过的文件：本文件自己含有全部模式串，扫它必然自伤。 */
 export const SCAN_SKIP = new Set(['guard.ts']);
 
@@ -63,6 +70,17 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
       // ④ gh 子进程的写调用
       for (const [re, why] of GH_WRITE_PATTERNS) {
         if (re.test(code)) out.push({ file, line, text: text.trim(), why });
+      }
+
+      // ⑤ 网络出口白名单：fetch / node:https / http 请求只许出现在 github.ts。
+      //    评审指出 v1 完全没把 fetch 放进雷达——绕开 Octokit 直接打 API 一路畅通。
+      if (base !== OCTOKIT_ALLOWED_FILE && /\b(fetch|https?\.request|axios|undici)\s*\(/.test(code)) {
+        out.push({ file, line, text: text.trim(), why: `网络出口只允许出现在 ${OCTOKIT_ALLOWED_FILE}` });
+      }
+
+      // ⑥ git 写操作
+      if (/\bgit\b[\s\S]*?['"](push|commit|merge|tag)['"]|git\s+(push|commit|merge)\b/.test(code)) {
+        out.push({ file, line, text: text.trim(), why: 'git 写操作' });
       }
     });
   }

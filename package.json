@@ -5,7 +5,9 @@
   "license": "MIT",
   "author": "Charlie Zong",
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/charliezong18/zhupi-mcp.git"
@@ -16,9 +18,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "vitest run && node scripts/print-milestones.mjs",
+    "test": "tsc --noEmit && vitest run && node scripts/print-milestones.mjs",
     "test:watch": "vitest",
-    "smoke": "npm run build && node scripts/smoke-tools-list.mjs",
+    "acceptance": "npm run build && node scripts/acceptance.mjs",
     "diagrams": "./render-diagrams.sh"
   },
   "dependencies": {

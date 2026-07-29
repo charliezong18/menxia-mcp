@@ -102,7 +102,7 @@ describe('inline 串还原', () => {
     expect(countsOf(t, []).unanswered).toBe(2);
   });
 
-  it('我方发的根批注不计入待回（R4 第三条）', () => {
+  it('我方发的根批注：保留在输出里（防丢数据）但不计入待回', () => {
     const ourRoot: RawInlineComment = {
       ...pr17Comments[0]!,
       id: 111,
@@ -110,8 +110,22 @@ describe('inline 串还原', () => {
     };
     delete (ourRoot as { in_reply_to_id?: unknown }).in_reply_to_id;
     const t = buildInlineThreads([...pr17Comments, ourRoot], pr17Reviews);
-    expect(t.map((x) => x.id)).not.toContain(111);
-    expect(t).toHaveLength(2);
+    // 第一轮代码评审指出：v1 只保留 desk 根，导致「我方发根批注、他在网页上回一句」时
+    // 他那句话在输出里彻底不存在——那是丢数据不是计数错。所以现在保留，只是不计入未回。
+    const mine = t.find((x) => x.id === 111)!;
+    expect(mine).toBeTruthy();
+    expect(mine.fromDesk).toBe(false);
+    expect(mine.answered).toBe(true);
+    expect(countsOf(t, []).unanswered).toBe(0);
+  });
+
+  it('我方根批注下面他的回话不会被丢掉', () => {
+    const emptyReviewId = pr17Reviews.find((r) => !r.body)!.id;
+    const ourRoot: RawInlineComment = { ...pr17Comments[0]!, id: 444, pull_request_review_id: emptyReviewId };
+    delete (ourRoot as { in_reply_to_id?: unknown }).in_reply_to_id;
+    const hisReply: RawInlineComment = { ...pr17Comments[2]!, id: 555, in_reply_to_id: 444, body: '这里我不同意' };
+    const t = buildInlineThreads([ourRoot, hisReply], pr17Reviews);
+    expect(JSON.stringify(t)).toContain('这里我不同意');
   });
 
   it('串再长也不会因为他在里面反驳就变成已回——他的反驳走的是新根批注', () => {
@@ -124,8 +138,57 @@ describe('inline 串还原', () => {
       pull_request_review_id: deskReviewId, // 来自朱批台
     };
     const t = buildInlineThreads([...pr17Comments, hisRebuttal], pr17Reviews);
-    const root = t.find((x) => x.id === pr17Comments[0]!.id)!;
-    expect(root.replies.map((r) => r.id)).not.toContain(222);
+    // 断言必须落在**这条反驳真正挂着的那个根**上。
+    // 第一轮代码评审抓到：v1 断言在另一条串上，于是把 desk 守卫整行删掉测试依然全绿。
+    const root = t.find((x) => x.id === hisRebuttal.in_reply_to_id)!;
+    expect(root).toBeTruthy();
+    // 他的反驳**保留在串里**（不丢数据），但因为串的最后一句是他说的，这条重新变成待回。
+    expect(root.replies.map((r) => r.id)).toContain(222);
+    expect(root.replies[root.replies.length - 1]!.fromDesk).toBe(true);
+    expect(root.answered).toBe(false);
+  });
+
+  it('反向自验：把作者判定去掉，上面那条必然变红', () => {
+    // 手工模拟「不看作者、有 reply 就算已回」的旧逻辑，确认它会得出错误答案。
+    const deskReviewId = pr17Reviews.find((r) => /御笔朱批/.test(r.body ?? ''))!.id;
+    const hisRebuttal: RawInlineComment = { ...pr17Comments[2]!, id: 222, pull_request_review_id: deskReviewId };
+    const all = [...pr17Comments, hisRebuttal];
+    const naive = all.filter((c) => !isRoot(c) && c.in_reply_to_id === hisRebuttal.in_reply_to_id);
+    expect(naive.length).toBeGreaterThan(0); // 旧逻辑：「有 reply 就算已回」→ 判成已回
+    const t = buildInlineThreads(all, pr17Reviews);
+    const root = t.find((x) => x.id === hisRebuttal.in_reply_to_id)!;
+    expect(root.answered).toBe(false); // 新逻辑：最后一句是他说的 → 待回
+  });
+
+  it('他反驳之后我方再回一句 → 重新变成已回', () => {
+    const deskId = pr17Reviews.find((r) => /御笔朱批/.test(r.body ?? ''))!.id;
+    const emptyId = pr17Reviews.find((r) => !r.body)!.id;
+    const rootId = pr17Comments[1]!.id;
+    const rebuttal: RawInlineComment = { ...pr17Comments[2]!, id: 301, in_reply_to_id: rootId, pull_request_review_id: deskId, created_at: '2026-07-29T10:00:00Z' };
+    const ourReply: RawInlineComment = { ...pr17Comments[2]!, id: 302, in_reply_to_id: rootId, pull_request_review_id: emptyId, created_at: '2026-07-29T11:00:00Z' };
+    const t = buildInlineThreads([...pr17Comments, rebuttal, ourReply], pr17Reviews);
+    expect(t.find((x) => x.id === rootId)!.answered).toBe(true);
+  });
+
+  it('outdated 走生产分支（传 headSha）—— 变异测试盲区', () => {
+    // 评审用变异测试证明：v1 的测试从不传 headSha，把 commit_id !== headSha 判反或写死常量，
+    // 23 条测试全绿，而生产调用永远传 headSha。
+    const sha = pr17Comments[0]!.commit_id!;
+    const current: RawInlineComment = { ...pr17Comments[0]!, id: 900, line: 65, commit_id: sha };
+    const stale: RawInlineComment = { ...pr17Comments[1]!, id: 901, line: null, commit_id: 'deadbeef' };
+    const t = buildInlineThreads([current, stale], pr17Reviews, sha);
+    expect(t.find((x) => x.id === 900)!.outdated).toBe(false);
+    expect(t.find((x) => x.id === 901)!.outdated).toBe(true);
+  });
+
+  it('多条回话按时间排序（fixture 每串只有 1 条，是覆盖盲区）', () => {
+    const rootId = pr17Comments[0]!.id;
+    const empty = pr17Reviews.find((r) => !r.body)!.id;
+    const later: RawInlineComment = { ...pr17Comments[2]!, id: 801, in_reply_to_id: rootId, created_at: '2026-07-29T10:00:00Z', pull_request_review_id: empty };
+    const earlier: RawInlineComment = { ...pr17Comments[2]!, id: 802, in_reply_to_id: rootId, created_at: '2026-07-29T09:00:00Z', pull_request_review_id: empty };
+    const t = buildInlineThreads([...pr17Comments, later, earlier], pr17Reviews);
+    const root = t.find((x) => x.id === rootId)!;
+    expect(root.replies.map((r) => r.id).slice(-2)).toEqual([802, 801]);
   });
 
   it('空输入不抛异常', () => {
@@ -182,6 +245,21 @@ describe('quoteFromHunk', () => {
 
   it('多行划选取末尾 span 行', () => {
     expect(quoteFromHunk('@@ -1 +3 @@\n+a\n+b\n+c', 2)).toBe('b\nc');
+  });
+
+  it('多行划选要滤掉删除行 —— span 数的是新文件的行数', () => {
+    // 评审实证：v1 直接取 hunk 末尾 span 行，在有删改的文件上会把已删除的旧文算进引文，
+    // 同时漏掉真正被划中的首行。
+    const hunk = '@@ -10,4 +10,4 @@\n ctx-line\n-old1\n-old2\n+new1\n+new2';
+    expect(quoteFromHunk(hunk, 3)).toBe('ctx-line\nnew1\nnew2');
+  });
+
+  it('no-newline 标记出现在中间也要滤掉', () => {
+    expect(quoteFromHunk('@@ -1,2 +1,2 @@\n-old\n\\ No newline at end of file\n+new', 2)).toBe('new');
+  });
+
+  it('span 超过可用行数时不越界', () => {
+    expect(quoteFromHunk('@@ -1 +1 @@\n+only', 99)).toBe('only');
   });
 
   it('缺 hunk 返回空串而不是崩', () => {

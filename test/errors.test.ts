@@ -15,7 +15,11 @@ describe('五种失败各有一句能照着修的话', () => {
     [{ kind: 'notFound', repo: 'o/r', pr: 42 }, '#42'],
     [{ kind: 'network', reason: 'getaddrinfo ENOTFOUND' }, '网络恢复后重试'],
     [{ kind: 'badInput', what: 'state 只能是 open' }, '入参不对'],
-    [{ kind: 'tooMany', repo: 'o/r', pr: 7 }, '超过一页'],
+    [{ kind: 'tooManyComments', repo: 'o/r', pr: 7 }, '超过一页'],
+    [{ kind: 'tooManyFolders', repo: 'o/r' }, '超过一页'],
+    [{ kind: 'rateLimit', retryAfterSec: 30 }, '重新登录没用'],
+    [{ kind: 'auth', why: 'noGh' }, '装 GitHub CLI'],
+    [{ kind: 'auth', why: 'ghTimeout' }, '十秒没响应'],
     [{ kind: 'unknown', detail: 'boom' }, '没预料到'],
   ];
   for (const [err, needle] of cases) {
@@ -63,6 +67,40 @@ describe('token 绝不进错误文本', () => {
   it('超长 detail 被截断', () => {
     const msg = messageFor({ kind: 'unknown', detail: 'x'.repeat(500) });
     expect(msg.length).toBeLessThan(220);
+  });
+});
+
+describe('新增的错误分类（第一轮代码评审的产物）', () => {
+  it('限流不再被误报成认证失效——重新登录对限流毫无帮助', () => {
+    const m = messageFor({ kind: 'rateLimit', retryAfterSec: 42 });
+    expect(m).toContain('限流');
+    expect(m).toContain('42');
+    expect(m).not.toContain('gh auth login');
+  });
+
+  it('gh 没装 → 叫人先装，不是叫人去登录', () => {
+    expect(messageFor({ kind: 'auth', why: 'noGh' })).toContain('brew install gh');
+  });
+
+  it('折列表超页的话术里不出现「#0」这种不存在的折号', () => {
+    expect(messageFor({ kind: 'tooManyFolders', repo: 'o/r' })).not.toContain('#0');
+  });
+
+  it('未知 kind 不会让 messageFor 崩（防新增分支时漏 case）', () => {
+    const weird = { kind: 'nope' } as unknown as ZhupiError;
+    expect(() => messageFor(weird)).not.toThrow();
+    expect(messageFor(weird)).toContain('未知错误类型');
+  });
+
+  it('脱敏大小写不敏感，且能吃掉 scheme 后面的秘密', () => {
+    expect(redact('GHP_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789')).not.toContain('GHP_ABCDEF');
+    expect(redact('Authorization: Basic Z2hwX0FCQ0RFRkdISUpLTE1OT1A=')).not.toContain('Z2hwX0FCQ0RF');
+    expect(redact('Authorization: token s3cr3t-xyz')).not.toContain('s3cr3t-xyz');
+  });
+
+  it('脱敏发生在唯一出口——裸插值的模板也过了一遍', () => {
+    const m = messageFor({ kind: 'repo', repo: 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789' });
+    expect(m).not.toContain('ghp_ABCDEF');
   });
 });
 

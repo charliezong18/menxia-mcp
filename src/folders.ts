@@ -46,7 +46,12 @@ async function listPulls(ref: RepoRef, state: 'open' | 'merged'): Promise<RawPul
   const pulls = await get<RawPull[]>(
     'GET /repos/{owner}/{repo}/pulls',
     { owner: ref.owner, repo: ref.repo, state: state === 'merged' ? 'closed' : 'open', per_page: PER_PAGE },
-    { pageGuard: { kind: 'tooMany', repo: ref.slug, pr: 0 } },
+    {
+      pageGuard: { kind: 'tooManyFolders', repo: ref.slug },
+      // v1 这里没传 notFound，仓名配错时落到默认值，用户看到「 里没有 #0。用 list_folders 看现有折号」
+      // ——主语为空、编号不存在、还让人去跑他刚跑的那个工具（评审实证）。
+      notFound: { kind: 'repo', repo: ref.slug },
+    },
   );
   return state === 'merged' ? pulls.filter((p) => p.merged_at != null) : pulls;
 }
@@ -58,11 +63,11 @@ async function listPulls(ref: RepoRef, state: 'open' | 'merged'): Promise<RawPul
  */
 async function getPull(ref: RepoRef, pr: number): Promise<RawPull> {
   try {
-    return await get<RawPull>('GET /repos/{owner}/{repo}/pulls/{pull_number}', {
-      owner: ref.owner,
-      repo: ref.repo,
-      pull_number: pr,
-    });
+    return await get<RawPull>(
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}',
+      { owner: ref.owner, repo: ref.repo, pull_number: pr },
+      { pageGuard: { kind: 'unknown', detail: '单折查询不该分页' }, notFound: { kind: 'notFound', repo: ref.slug, pr } },
+    );
   } catch (e) {
     if ((e as { info?: { kind?: string } }).info?.kind !== 'notFound') throw e;
     if (await repoReadable(ref.owner, ref.repo)) return fail({ kind: 'notFound', repo: ref.slug, pr });
@@ -76,22 +81,26 @@ export async function readFolder(pr: number, ref: RepoRef = reviewRepo()): Promi
 
 async function hydrate(ref: RepoRef, pull: RawPull): Promise<FolderDetail> {
   const base = { owner: ref.owner, repo: ref.repo, per_page: PER_PAGE };
-  const guard = { kind: 'tooMany' as const, repo: ref.slug, pr: pull.number };
+  const guard = { kind: 'tooManyComments' as const, repo: ref.slug, pr: pull.number };
+  const nf = { kind: 'notFound' as const, repo: ref.slug, pr: pull.number };
 
   const [comments, reviews, issueComments] = await Promise.all([
     get<RawInlineComment[]>(
       'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments',
       { ...base, pull_number: pull.number },
-      { pageGuard: guard },
+      { pageGuard: guard, notFound: nf },
     ),
-    get<RawReview[]>('GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews', {
-      ...base,
-      pull_number: pull.number,
-    }),
+    // reviews 也必须带页护栏：它是作者判定的**唯一**数据源，截断会让他的根批注
+    // 被判成我方 → 整条串从输出里消失 → 未回数少报。v1 恰恰漏在这个 endpoint 上（评审指出）。
+    get<RawReview[]>(
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews',
+      { ...base, pull_number: pull.number },
+      { pageGuard: guard, notFound: nf },
+    ),
     get<RawIssueComment[]>(
       'GET /repos/{owner}/{repo}/issues/{issue_number}/comments',
       { ...base, issue_number: pull.number },
-      { pageGuard: guard },
+      { pageGuard: guard, notFound: nf },
     ),
   ]);
 
@@ -108,18 +117,41 @@ async function hydrate(ref: RepoRef, pull: RawPull): Promise<FolderDetail> {
   };
 }
 
+/**
+ * 一折读失败**不能**拖垮整个列表。
+ * v1 用 Promise.all，评审实证：一折批注超 100 条 → 页护栏抛错 → list_folders 与
+ * read_comments 双双返回零折，另外健康的折全读不到。design 里「宁可明着失败」
+ * 的本意是**单折**明着失败，不是全仓不可用。
+ */
 export async function readAll(
   state: 'open' | 'merged' = 'open',
   ref: RepoRef = reviewRepo(),
-): Promise<FolderDetail[]> {
+): Promise<Array<FolderDetail | FolderError>> {
   const pulls = await listPulls(ref, state);
-  return Promise.all(pulls.map((p) => hydrate(ref, p)));
+  const settled = await Promise.allSettled(pulls.map((p) => hydrate(ref, p)));
+  return settled.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    const p = pulls[i]!;
+    return {
+      number: p.number,
+      title: p.title,
+      headRefName: p.head.ref,
+      error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+    };
+  });
 }
 
+export interface FolderError {
+  number: number;
+  title: string;
+  headRefName: string;
+  error: string;
+}
+
+export const isFolderError = (f: FolderDetail | FolderError): f is FolderError => 'error' in f;
+
 /** list_folders 只是 readFolder 的投影——不另写计数逻辑（design §2）。 */
-export const summarize = (d: FolderDetail): FolderSummary => ({
-  number: d.number,
-  title: d.title,
-  headRefName: d.headRefName,
-  counts: d.counts,
-});
+export const summarize = (d: FolderDetail | FolderError): FolderSummary | FolderError =>
+  isFolderError(d)
+    ? d
+    : { number: d.number, title: d.title, headRefName: d.headRefName, counts: d.counts };
