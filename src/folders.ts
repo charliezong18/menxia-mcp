@@ -5,11 +5,13 @@
 
 import { reviewRepo, type RepoRef } from './config.js';
 import { get, repoReadable } from './github.js';
-import { fail } from './errors.js';
+import { fail, redact } from './errors.js';
 import {
+  attentionOf,
   buildInlineThreads,
   classifyConversation,
   countsOf,
+  type AttentionItem,
   type Counts,
   type ConversationItem,
   type InlineThread,
@@ -19,10 +21,16 @@ import {
 } from './threads.js';
 
 export interface FolderSummary {
+  /** 判别字段：坏折是 ok:false，形状完全不同。第二轮评审指出联合类型直接泄漏给模型会 TypeError。 */
+  ok: true;
   number: number;
   title: string;
   headRefName: string;
+  /** 最近活动时间。「哪些折在等我」隐含的是「按最近动过排」，没有它模型连自己排都排不了。 */
+  updatedAt: string;
   counts: Counts;
+  /** 要人看一眼的东西，带正文预览——光给数字答不了「哪些折在等我」。 */
+  attention: AttentionItem[];
 }
 
 export interface FolderDetail extends FolderSummary {
@@ -36,6 +44,8 @@ interface RawPull {
   title: string;
   head: { ref: string; sha: string };
   merged_at: string | null;
+  updated_at?: string;
+  created_at?: string;
 }
 
 const PER_PAGE = 100;
@@ -107,13 +117,16 @@ async function hydrate(ref: RepoRef, pull: RawPull): Promise<FolderDetail> {
   const inline = buildInlineThreads(comments, reviews, pull.head.sha);
   const conversation = classifyConversation(issueComments);
   return {
+    ok: true,
     number: pull.number,
     title: pull.title,
     headRefName: pull.head.ref,
+    updatedAt: pull.updated_at ?? pull.created_at ?? '',
     headSha: pull.head.sha,
     inline,
     conversation,
     counts: countsOf(inline, conversation),
+    attention: attentionOf(inline, conversation),
   };
 }
 
@@ -129,29 +142,42 @@ export async function readAll(
 ): Promise<Array<FolderDetail | FolderError>> {
   const pulls = await listPulls(ref, state);
   const settled = await Promise.allSettled(pulls.map((p) => hydrate(ref, p)));
-  return settled.map((r, i) => {
+  const out = settled.map((r, i): FolderDetail | FolderError => {
     if (r.status === 'fulfilled') return r.value;
     const p = pulls[i]!;
     return {
+      ok: false,
       number: p.number,
       title: p.title,
       headRefName: p.head.ref,
-      error: r.reason instanceof Error ? r.reason.message : String(r.reason),
+      // 过一遍 redact：FolderError.error 直接进工具输出，是「脱敏只有唯一出口」的第二个出口。
+      error: redact(r.reason instanceof Error ? r.reason.message : String(r.reason)),
     };
   });
+  // 按最近活动倒序：实测「唯一有待回的那折 #7」在创建时间序里排最后一个。
+  return out.sort((a, b) => (b.ok ? b.updatedAt : '').localeCompare(a.ok ? a.updatedAt : ''));
 }
 
 export interface FolderError {
+  ok: false;
   number: number;
   title: string;
   headRefName: string;
   error: string;
 }
 
-export const isFolderError = (f: FolderDetail | FolderError): f is FolderError => 'error' in f;
+export const isFolderError = (f: FolderDetail | FolderError): f is FolderError => f.ok === false;
 
 /** list_folders 只是 readFolder 的投影——不另写计数逻辑（design §2）。 */
 export const summarize = (d: FolderDetail | FolderError): FolderSummary | FolderError =>
   isFolderError(d)
     ? d
-    : { number: d.number, title: d.title, headRefName: d.headRefName, counts: d.counts };
+    : {
+        ok: true,
+        number: d.number,
+        title: d.title,
+        headRefName: d.headRefName,
+        updatedAt: d.updatedAt,
+        counts: d.counts,
+        attention: d.attention,
+      };

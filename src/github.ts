@@ -81,13 +81,30 @@ export function sanitizeParams(params: Record<string, unknown>): Record<string, 
 // v1 查 e.code 恒为 false，network 这一支从来没被走到过（评审实证）。
 const statusOf = (e: unknown): number | undefined => (e as { status?: number } | null)?.status;
 
-const NETWORKISH = /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|fetch failed|socket hang up|network/i;
+// undici（v21 底层）的措辞与 node:http 时代不同：连接中途被断是 "other side closed"，
+// 真正的 UND_ERR_SOCKET 藏在 cause 链第二层。评审用真 socket reset 打穿过 v2 的判定。
+const NETWORKISH =
+  /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EPIPE|fetch failed|socket hang up|other side closed|terminated|network/i;
+const NET_CODES = ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'UND_ERR_SOCKET'];
+
+/** 沿 cause 链往下找，不只看一层。 */
+function chain(e: unknown, depth = 4): unknown[] {
+  const out: unknown[] = [];
+  let cur = e;
+  for (let i = 0; i < depth && cur != null; i += 1) {
+    out.push(cur);
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return out;
+}
 
 function isNetworkish(e: unknown): boolean {
-  const code = (e as { code?: string } | null)?.code ?? (e as { cause?: { code?: string } } | null)?.cause?.code ?? '';
-  if (['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(code)) return true;
-  const msg = String((e as Error)?.message ?? '');
-  return statusOf(e) === 500 && NETWORKISH.test(msg);
+  for (const link of chain(e)) {
+    const code = String((link as { code?: string } | null)?.code ?? '');
+    if (NET_CODES.includes(code)) return true;
+    if (NETWORKISH.test(String((link as Error)?.message ?? ''))) return true;
+  }
+  return false;
 }
 
 function isRateLimited(e: unknown): number | null {
@@ -98,7 +115,30 @@ function isRateLimited(e: unknown): number | null {
     const reset = Number(h['x-ratelimit-reset']);
     return Number.isFinite(reset) ? Math.max(0, Math.round(reset - Date.now() / 1000)) : 0;
   }
+  // secondary rate limit：403，x-ratelimit-remaining 非 0，**唯一信号在 body message**。
+  // 不看它就会落到「403 → 认证失效 → 去 gh auth login」，而重登对限流毫无帮助（评审实证）。
+  const msg = `${String((e as Error)?.message ?? '')} ${String(
+    (e as { response?: { data?: { message?: string } } }).response?.data?.message ?? '',
+  )}`;
+  if (/secondary rate limit|abuse detection|rate limit/i.test(msg)) return 0;
   return null;
+}
+
+/**
+ * 异常 → 分类。**抽成纯函数是为了可测**：
+ * 第二轮评审的唯一高危是「get() 零覆盖」——六条关键行为只活在那个函数里，
+ * 而它被测试整个 mock 掉。评审用探针在里面现场打穿了两条声称已修的分类
+ * （socket reset 报「没预料到」、secondary rate limit 报「去登录」）。
+ * 没测的必然结果。
+ */
+export function classify(e: unknown, opts: { notFound?: ZhupiError } = {}): ZhupiError {
+  if (isNetworkish(e)) return { kind: 'network', reason: String((e as Error).message ?? e) };
+  const retry = isRateLimited(e);
+  if (retry !== null) return { kind: 'rateLimit', retryAfterSec: retry || undefined };
+  const st = statusOf(e);
+  if (st === 404) return opts.notFound ?? { kind: 'repo', repo: '' };
+  if (st === 401 || st === 403) return { kind: 'auth', why: 'expired' };
+  return { kind: 'unknown', detail: String((e as Error).message ?? e) };
 }
 
 export interface GetOptions {
@@ -132,13 +172,7 @@ export async function get<T = unknown>(
         resetAuthCache();
         continue;
       }
-      if (isNetworkish(e)) return fail({ kind: 'network', reason: String((e as Error).message ?? e) });
-      const retry = isRateLimited(e);
-      if (retry !== null) return fail({ kind: 'rateLimit', retryAfterSec: retry || undefined });
-      if (statusOf(e) === 404) return fail(opts.notFound ?? { kind: 'repo', repo: '' });
-      if (statusOf(e) === 401) return fail({ kind: 'auth', why: 'expired' });
-      if (statusOf(e) === 403) return fail({ kind: 'auth', why: 'expired' });
-      return fail({ kind: 'unknown', detail: String((e as Error).message ?? e) });
+      return fail(classify(e, { notFound: opts.notFound }));
     }
   }
   return fail({ kind: 'auth', why: 'expired' });

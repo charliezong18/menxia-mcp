@@ -13,13 +13,23 @@ zhupi is where a human reads and annotates AI-authored documents. This is the ot
 
 ---
 
-## Status: spec only
+## Status: Phase 1 shipped (two read-only tools)
 
-**No server code exists yet.** This repo currently contains documents and no implementation — no npm package, no `dist/`, nothing to install. If you came here for a working MCP server, come back after Phase 1.
+**Installable and usable.** `list_folders` and `read_comments` are implemented and wired into the MCP config; 96 unit tests plus 38 real-machine assertions are green, run against live GitHub data.
 
-One piece *has* shipped, and it is not part of the server: the [route guard](SPEC.md) that refuses raw `gh pr create` against the folder repo. It lives in the review-loop skill, not here, and it ships first on purpose — see "What MCP does not fix" below.
+Measured context saved versus the string of `gh api` calls it replaces: **7.1×** for one folder, **3.9×** across all open folders (41 KB → 5.8 KB). That was the headline reason to build this, and the number holds.
 
-Where things stand: [MILESTONES](MILESTONES.md) has the per-phase exit criteria and what actually happened; [OPEN-QUESTIONS](OPEN-QUESTIONS.md) has what is still undecided and the default being proceeded on. What follows describes what is being built, in the present tense, because that is what a spec is for — not because it exists.
+Not yet implemented: `open_folder`, `lint_folder`, `audit_folders`, `reply_comment` — see Phase 2/3 in [MILESTONES](MILESTONES.md).
+
+**One piece shipped earlier and is not part of the server**: the [route guard](SPEC.md) that refuses raw `gh pr create` against the folder repo. It lives in the review-loop skill and shipped first on purpose — see "What MCP does not fix" below.
+
+Install:
+```json
+{ "mcpServers": { "zhupi": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
+```
+Run `npm install && npm run build` first. Authentication borrows the machine's existing `gh`; no separate PAT.
+
+Where things stand: [MILESTONES](MILESTONES.md) · [OPEN-QUESTIONS](OPEN-QUESTIONS.md)
 
 ## Why
 
@@ -43,15 +53,15 @@ This distinction is the reason the spec exists. If you are considering the same 
 
 ## Tool surface
 
-Six tools. Merging is deliberately not one of them — that is the human's click, in the app.
+Six tools; **the two marked ✅ are shipped**. Merging is deliberately not one of them — that is the human's click, in the app.
 
 | Tool | What it does |
 |---|---|
 | `open_folder` | Submit a document: branch, commit, push, open the PR, weld in the backlink marker, verify it landed |
 | `lint_folder` | Check house style before submitting |
 | `audit_folders` | Sweep everything already open for gaps |
-| `list_folders` | List submissions, with unanswered-annotation counts |
-| `read_comments` | Read annotations back as structured JSON, with `answered` computed server-side |
+| `list_folders` ✅ | List folders, most-recently-active first, with counts and previews of what needs a look |
+| `read_comments` ✅ | Read annotations as structured JSON, with authorship and `answered` computed server-side |
 | `reply_comment` | Reply to one annotation, or post an overall comment |
 
 ## How it works

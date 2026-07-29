@@ -10,6 +10,8 @@ import {
   isFromDesk,
   reviewBodyById,
   quoteFromHunk,
+  attentionOf,
+  preview,
   type RawInlineComment,
   type RawIssueComment,
   type RawReview,
@@ -78,7 +80,7 @@ describe('inline 串还原', () => {
     expect(threads).toHaveLength(2);
     expect(threads.map((t) => t.replies.length)).toEqual([1, 1]);
     expect(threads.every((t) => t.answered)).toBe(true);
-    expect(countsOf(threads, []).unanswered).toBe(0);
+    expect(countsOf(threads, []).needsReply).toBe(0);
   });
 
   it('line 回退到 original_line，并标记 outdated', () => {
@@ -99,7 +101,7 @@ describe('inline 串还原', () => {
     const t = buildInlineThreads(onlyRoots, pr17Reviews);
     expect(t).toHaveLength(2);
     expect(t.every((x) => !x.answered)).toBe(true);
-    expect(countsOf(t, []).unanswered).toBe(2);
+    expect(countsOf(t, []).needsReply).toBe(2);
   });
 
   it('我方发的根批注：保留在输出里（防丢数据）但不计入待回', () => {
@@ -116,7 +118,7 @@ describe('inline 串还原', () => {
     expect(mine).toBeTruthy();
     expect(mine.fromDesk).toBe(false);
     expect(mine.answered).toBe(true);
-    expect(countsOf(t, []).unanswered).toBe(0);
+    expect(countsOf(t, []).needsReply).toBe(0);
   });
 
   it('我方根批注下面他的回话不会被丢掉', () => {
@@ -193,7 +195,7 @@ describe('inline 串还原', () => {
 
   it('空输入不抛异常', () => {
     expect(buildInlineThreads([], [])).toEqual([]);
-    expect(countsOf([], [])).toEqual({ unanswered: 0, unknown: 0, inferred: 0 });
+    expect(countsOf([], [])).toEqual({ needsReply: 0, unclear: 0, hasFollowUp: 0 });
   });
 });
 
@@ -207,9 +209,9 @@ describe('总批：三态，永不返回 true/false', () => {
 
   it('unknown 不计入 unanswered —— 否则最后一条（几乎永远是我方回话）会被谎报成待办', () => {
     const c = countsOf([], classifyConversation(pr18Conv));
-    expect(c.unanswered).toBe(0);
-    expect(c.unknown).toBe(1);
-    expect(c.inferred).toBe(1);
+    expect(c.needsReply).toBe(0);
+    expect(c.unclear).toBe(1);
+    expect(c.hasFollowUp).toBe(1);
   });
 
   it('只有一条 → unknown', () => {
@@ -266,5 +268,49 @@ describe('quoteFromHunk', () => {
     expect(quoteFromHunk(undefined)).toBe('');
     expect(quoteFromHunk(null)).toBe('');
     expect(quoteFromHunk('')).toBe('');
+  });
+});
+
+describe('第二轮评审的三处修复', () => {
+  it('LEFT 侧批注（锚在被删除的那一行）要引删除行，不能引后面的新增行', () => {
+    // 评审实证：v2 无条件滤掉 '-'，于是「他批的正是那句被删掉的话」时，
+    // 引文变成紧随其后的新增行——引了一句他根本没划的话，而且是静默的。
+    const hunk = '@@ -10,3 +10,2 @@\n ctx\n-这行被删了，他就是在批这一行\n+新行';
+    expect(quoteFromHunk(hunk, 1, 'LEFT')).toBe('这行被删了，他就是在批这一行');
+    expect(quoteFromHunk(hunk, 1, 'RIGHT')).toBe('新行');
+  });
+
+  it('side=LEFT 从 payload 一路传到引文', () => {
+    const c: RawInlineComment = {
+      ...pr17Comments[0]!,
+      id: 700,
+      side: 'LEFT',
+      diff_hunk: '@@ -1,2 +1,1 @@\n ctx\n-被删的原话\n+替换后的话',
+    };
+    const t = buildInlineThreads([c], pr17Reviews);
+    expect(t[0]!.quote).toBe('被删的原话');
+  });
+
+  it('孤儿回话不再被静默丢弃', () => {
+    // 根被删或分页截断时，reply 的 in_reply_to_id 指向不存在的 comment。
+    // v2 只在 roots.map 里查 repliesByRoot，孤儿在输出里彻底不存在。
+    const orphan: RawInlineComment = { ...pr17Comments[2]!, id: 990, in_reply_to_id: 123456789, body: '他的追问' };
+    const t = buildInlineThreads([pr17Comments[0]!, orphan], pr17Reviews);
+    expect(JSON.stringify(t)).toContain('他的追问');
+    expect(t.find((x) => x.id === 990)?.orphan).toBe(true);
+  });
+
+  it('attention 带正文预览，且按时间倒序', () => {
+    const roots = pr17Comments.filter(isRoot);
+    const t = buildInlineThreads(roots, pr17Reviews);
+    const a = attentionOf(t, classifyConversation(pr18Conv));
+    expect(a.length).toBeGreaterThan(0);
+    expect(a.every((x) => x.preview.length > 0)).toBe(true);
+    expect(a.every((x, i) => i === 0 || a[i - 1]!.createdAt >= x.createdAt)).toBe(true);
+  });
+
+  it('preview 压平空白并截断到 80 字', () => {
+    expect(preview('  多余   空白\n换行  ')).toBe('多余 空白 换行');
+    expect(preview('x'.repeat(200))).toHaveLength(81);
   });
 });
