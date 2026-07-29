@@ -45,14 +45,18 @@ export interface InlineReply {
   id: number;
   body: string;
   createdAt: string;
+  /** 这句是不是他从朱批台说的（true = 他的反驳/追问，不是我方回话） */
+  fromDesk: boolean;
 }
 
 export interface InlineThread {
   id: number;
   path: string;
-  /** line 实测常为 null（批注后推了改版 → outdated），回退 original_line */
+  /** 批注后若推了改版，GitHub 对 outdated 批注返回 line: null，此时回退 original_line */
   line: number | null;
   startLine: number | null;
+  /** 是不是从朱批台呈上来的（= 他的批注）。false 表示这条根批注是我方自己发的。 */
+  fromDesk: boolean;
   outdated: boolean;
   quote: string;
   body: string;
@@ -116,13 +120,18 @@ const NO_NEWLINE = '\\ No newline at end of file';
 export function quoteFromHunk(hunk: string | null | undefined, span = 1): string {
   if (!hunk) return '';
   let lines = hunk.split('\n');
-  while (lines.length > 0 && lines[lines.length - 1]?.trim() === NO_NEWLINE) lines.pop();
-  // 丢掉 @@ 头
+  // no-newline 标记要**全部**过滤，不只是末行——它出现在中间时会被当正文混进引文。
+  lines = lines.filter((l) => l.trim() !== NO_NEWLINE);
   if (lines[0]?.startsWith('@@')) lines = lines.slice(1);
-  if (lines.length === 0) return '';
-  const take = Math.max(1, Math.min(span, lines.length));
-  return lines
-    .slice(lines.length - take)
+  // span 数的是**新文件**的行数，所以必须先滤掉删除行（'-'），只留上下文行与新增行。
+  // v1 直接取 hunk 末尾 span 行，在有删改的文件上会把已删除的旧文算进引文、
+  // 同时漏掉真正被划中的首行（评审用 '@@ -10,4 +10,4 @@ ctx/-old1/-old2/+new1/+new2' 实证）。
+  const newSide = lines.filter((l) => l.length === 0 || l[0] !== '-');
+  const pool = newSide.length > 0 ? newSide : lines;
+  if (pool.length === 0) return '';
+  const take = Math.max(1, Math.min(span, pool.length));
+  return pool
+    .slice(pool.length - take)
     .map((l) => (l.length > 0 && (l[0] === '+' || l[0] === '-' || l[0] === ' ') ? l.slice(1) : l))
     .join('\n');
 }
@@ -135,13 +144,14 @@ export function buildInlineThreads(
   headSha?: string | null,
 ): InlineThread[] {
   const bodies = reviewBodyById(reviews);
-  const roots = comments.filter((c) => isRoot(c) && isFromDesk(c, bodies));
+  // **所有**根批注都建串，不只是朱批台来的。
+  // v1 只保留 desk 根，导致「我方发了根批注、他在网页/手机上回了一句」时，
+  // 他那句话在输出里彻底不存在——那是丢数据，不只是计数错（评审实证）。
+  const roots = comments.filter(isRoot);
 
-  // 我方回话：非根，且不是从朱批台来的。zhupi 发不了 reply，所以实践上「非根」即我方。
   const repliesByRoot = new Map<number, RawInlineComment[]>();
   for (const c of comments) {
     if (isRoot(c)) continue;
-    if (isFromDesk(c, bodies)) continue; // 他绕开朱批在网页上回的，不算我方回话
     const rootId = c.in_reply_to_id;
     if (rootId == null) continue;
     const arr = repliesByRoot.get(rootId) ?? [];
@@ -155,18 +165,29 @@ export function buildInlineThreads(
     const span = line != null && startLine != null && line >= startLine ? line - startLine + 1 : 1;
     const replies = (repliesByRoot.get(r.id) ?? [])
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
-      .map((x) => ({ id: x.id, body: x.body, createdAt: x.created_at }));
+      .map((x) => ({ id: x.id, body: x.body, createdAt: x.created_at, fromDesk: isFromDesk(x, bodies) }));
+    const fromDesk = isFromDesk(r, bodies);
+    // 「已回」= 串里**最后一句是我方说的**。
+    // 只看「有没有 reply」会被他的反驳骗过去（GitHub 把整串 reply 都指向根，
+    // 他在串里再反驳一句，整串就显示成已回，而那恰恰是最要紧的一条）。
+    // 只看「有没有我方 reply」同样会：他反驳在后，串仍然算已回。
+    const lastIsOurs = replies.length > 0 && !replies[replies.length - 1]!.fromDesk;
     return {
       id: r.id,
       path: r.path,
       line,
       startLine,
-      outdated: headSha != null && r.commit_id != null ? r.commit_id !== headSha : r.line == null,
+      fromDesk,
+      // 优先信 GitHub 自己的信号：line 非 null 就说明这条还锚在当前 diff 上。
+      // commit_id 只作兜底——v1 只有 commit_id 那一支，而测试从不传 headSha，
+      // 于是生产走的分支在测试里覆盖率为 0（评审用变异测试实证：判据写反也全绿）。
+      outdated: r.line != null ? false : headSha != null && r.commit_id != null ? r.commit_id !== headSha : true,
       quote: quoteFromHunk(r.diff_hunk, span),
       body: r.body,
       createdAt: r.created_at,
       replies,
-      answered: replies.length > 0,
+      // 我方自己发的根批注不算「待我回」（R4 第三条）
+      answered: fromDesk ? lastIsOurs : true,
     };
   });
 }
@@ -188,7 +209,8 @@ export function classifyConversation(items: RawIssueComment[]): ConversationItem
 
 export function countsOf(inline: InlineThread[], conversation: ConversationItem[]): Counts {
   return {
-    unanswered: inline.filter((t) => !t.answered).length,
+    // 只数「他发的、我方还没回」的。我方自己发的根批注 answered 恒为 true，不进这里。
+    unanswered: inline.filter((t) => t.fromDesk && !t.answered).length,
     unknown: conversation.filter((c) => c.answered === 'unknown').length,
     inferred: conversation.filter((c) => c.answered === 'inferred').length,
   };

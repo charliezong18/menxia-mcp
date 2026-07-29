@@ -43,16 +43,22 @@ const TOOLS = [
 function parseState(raw: unknown): State {
   if (raw === undefined || raw === null) return 'open';
   if (typeof raw === 'string' && (STATE_VALUES as readonly string[]).includes(raw)) return raw as State;
-  throw new ZhupiFailure({ kind: 'badInput', what: `state 只能是 ${STATE_VALUES.join(' 或 ')}，收到 ${String(raw)}` });
+  // 用 JSON.stringify 不用 String()：String(['open']) === 'open'，
+  // 报错会变成「state 只能是 open 或 merged，收到 open」，模型读到会以为 open 被拒然后死循环重试。
+  throw new ZhupiFailure({
+    kind: 'badInput',
+    what: `state 只能是 ${STATE_VALUES.join(' 或 ')}，收到 ${JSON.stringify(raw)}`,
+  });
 }
 
 function parsePr(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) return undefined;
-  const n = typeof raw === 'number' ? raw : Number(raw);
-  if (!Number.isInteger(n) || n < 1) {
-    throw new ZhupiFailure({ kind: 'badInput', what: `pr 得是正整数，收到 ${String(raw)}` });
+  // 严格判类型：v1 用 Number() 强转，实测 "3" / [3] / true 全被接受（分别 → 3、3、1），
+  // 与 inputSchema 声明的 type:integer 矛盾。
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
+    throw new ZhupiFailure({ kind: 'badInput', what: `pr 得是正整数，收到 ${JSON.stringify(raw)}` });
   }
-  return n;
+  return raw;
 }
 
 const asText = (v: unknown) => ({ content: [{ type: 'text' as const, text: JSON.stringify(v, null, 2) }] });
@@ -93,9 +99,12 @@ async function main(): Promise<void> {
   await server.connect(new StdioServerTransport());
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((e: unknown) => {
-    process.stderr.write(`zhupi-mcp 起不来：${String((e as Error)?.message ?? e)}\n`);
-    process.exit(1);
-  });
-}
+// 无条件启动。
+// v1 写的是 `import.meta.url === \`file://${process.argv[1]}\``——两边的编码规则不同
+// （前者 percent-encoded 且已解析 symlink），路径带空格、带中文、或经 symlink 调用时必然不等，
+// 于是 main() 不执行、进程零 handler 立刻 exit 0，客户端只看到「起来就断」且没有一个字的诊断。
+// 评审用 symlink 实证过。这个文件本来就只有一个用途，没有被 import 的场景，无条件跑最稳。
+main().catch((e: unknown) => {
+  process.stderr.write(`zhupi-mcp 起不来：${String((e as Error)?.message ?? e)}\n`);
+  process.exit(1);
+});
