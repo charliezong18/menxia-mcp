@@ -18,11 +18,11 @@ Things that are thought through but not scheduled.
 
 ## B2 · Feed bilingual gaps straight to a translator
 
-**What**: `audit_folders --fix` reports missing translation pairs but cannot fill them. Let it hand the gap to agy and write the result back.
+**What**: `audit_folders --fix` reports missing translation pairs but cannot fill them. Let it hand the gap to a translation agent and write the result back.
 
-**Why**: the 11-documents-missing-a-pair backlog was cleared by hand-dispatching three batches to agy. That is exactly the shape of work a tool should own.
+**Why**: the 11-documents-missing-a-pair backlog was cleared by hand-dispatching three batches to a translation agent. That is exactly the shape of work a tool should own.
 
-**How**: shell out to `agy -p` with the prompt discipline that already works (self-contained, absolute paths, forbid directory search, never fabricate), then run the structural acceptance check — line count, heading count, code-block count — before writing anything.
+**How**: shell out to whichever translation agent is in use (no longer assumed to be agy as of 2026-07-29) with the prompt discipline that already works (self-contained, absolute paths, forbid directory search, never fabricate), then run the structural acceptance check — line count, heading count, code-block count — before writing anything.
 
 **Undecided**: whether a machine should ever write a translation without a human comparing it. The one real run produced zero high-severity errors but six medium ones, all from mechanical glossary substitution, and a human caught them. Auto-writing without that pass would have shipped them.
 

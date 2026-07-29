@@ -11,12 +11,12 @@ The rollout order lives in [SPEC §8](SPEC.md). This file adds the thing the spe
 | Phase | Exit criteria (falsifiable) | Status |
 |---|---|---|
 | **0 · Route guard** | 21/21 in `guard-pr-create.test.sh`; both paths observed live (a blocked call actually refused, a legitimate call actually passed); SKILL.md and SPEC §7 agree with the code | **✅ 2026-07-28** |
-| **1 · Read-only tools** | `read_comments` returns the real annotations on a real folder with `answered` correct against a hand count; `list_folders` unanswered counts match; **agy mounts the server and calls one tool successfully** | not started |
+| **1 · Read-only tools** | `read_comments` returns the real annotations on a real folder with `answered` correct against a hand count; `list_folders` unanswered counts match | not started |
 | **2 · lint_folder** | Differential test over every open folder plus one must-fail sample per rule; new and old outputs align line by line, every difference either fixed or documented in SPEC §5.2 | not started |
 | **3 · Write tools** | One folder opened end to end through `open_folder`; two concurrent sessions provably do not collide (flock observed, not assumed); the backlink marker read back from the live PR body | not started |
 | **4 · Retirement** | With all four bash scripts deleted, one full round completes: open → read → reply; SKILL.md reduced to glossary + tool pointers; hook message points at the MCP tool; the SPEC §5.3 #6 documentation debt paid | not started |
 
-**Phase 1 carries the project's largest risk, deliberately.** If agy cannot mount an MCP server, cross-harness — the single biggest reason to build this at all ([SPEC §1](SPEC.md)) — evaporates, and phases 3–4 need re-justifying. That check is an exit criterion of the *first* phase, not a late discovery.
+**The largest risk now sits in Phase 2, not Phase 1.** Phase 1 used to carry "can agy mount an MCP server" — that check was voided on 2026-07-29 when agy was dropped ([SPEC §1](SPEC.md)). It was not answered, it was routed around. **The risk did not disappear, it relocated**: what is most likely to ruin this project now is the Phase 2 lint port silently losing accumulated fixes. That is not a failure you can observe — the scripts are gone, the tests are green, and the mistakes happen anyway. Only the differential test catches it.
 
 ## What actually happened
 
