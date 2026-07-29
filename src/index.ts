@@ -21,7 +21,8 @@ const TOOLS = [
       '看 attention 里的 preview 自己判，别当成 0 就跳过\n' +
       '· counts.hasFollowUp —— 后面还有别的总批。**不代表已回**（他连发两条时第一条也在这）\n' +
       '· attention[] —— 每条待看的正文前 80 字 + 时间，够直接判断要不要处理\n' +
-      '注意：needsReply **不含总批**（总批没有判别信号，一律进 unclear）。' +
+      '注意：agent 与用户共用同一个 GitHub 账号，所以「谁说的」只在他走朱批台时才确定。' +
+      '他从 GitHub 网页/手机批注或回话时与 agent 同形，一律进 unclear + attention，**不要因为 needsReply=0 就说没事**。' +
       '坏折返回 { ok: false, error }，没有 counts。',
     inputSchema: {
       type: 'object',
@@ -37,7 +38,10 @@ const TOOLS = [
       '把一折的批注读成结构化 JSON。**要读某一折就传 pr**——不传会扫全部 open 折，体积大一个量级。\n' +
       '· inline —— 还原好的批注串：根批注 + replies（每条带 fromDesk 标明是他说的还是我方回的），' +
       '含引文 quote、行号 line、是否 outdated\n' +
-      '· conversation —— 会话区总批，answered 只有 inferred / unknown 两值，**永远不会是 true**\n' +
+      '· conversation —— 会话区总批，answered 只有 inferred / unknown 两值，**永远不会是 true**；' +
+      'fromDesk=true 的那些是 zhupi 因为锚不到行而并入总批的朱批，**确定是他写的**\n' +
+      '· inline[].answered —— 只在 fromDesk=true 时有意义；fromDesk=false 表示这条根批注' +
+      '不是从朱批台来的（可能是他从 GitHub 网页发的，也可能是 agent 自己发的），此时看 attention\n' +
       '· counts / attention —— 与 list_folders 同名同义',
     inputSchema: {
       type: 'object',
@@ -80,7 +84,9 @@ function parsePr(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) return undefined;
   // 严格判类型：v1 用 Number() 强转，实测 "3" / [3] / true 全被接受（分别 → 3、3、1），
   // 与 inputSchema 声明的 type:integer 矛盾。
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
+  // 上界也要卡：Number.isInteger(1e21) 为真，而 String(1e21) === '1e+21'，
+  // GitHub 按 to_i 解析成 1 —— 不报错，**返回另一折**（第三轮评审实证）。
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 1_000_000) {
     throw new ZhupiFailure({ kind: 'badInput', what: `pr 得是正整数，收到 ${JSON.stringify(raw)}` });
   }
   return raw;

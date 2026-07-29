@@ -9,11 +9,26 @@
 
 export const DESK_MARK = /^御笔朱批/;
 
+/**
+ * zhupi 的降级路径（zhupi/src/ui.js:545-553）：草稿写于旧版本（`stale = d.ref !== ref`）
+ * 或行号锚不到可批注行时，那些朱批**不进 inline，被塞进 review body**，前缀是这一句。
+ *
+ * 两个后果，都严重且静默：
+ *   ① 只要有一条降级，整个 review body 就不再是「御笔朱批 · N 条」——
+ *      这一批里**成功锚上的**批注会被判成非朱批台 → answered=true → 看不见；
+ *   ② 若全部降级，review 里零条 comment，他写的东西只存在于 body 里 → 工具直接说「这折没事」。
+ * 而「隔夜草稿 + agent 推过改版」正是最常见的形态。
+ */
+export const DESK_FALLBACK_MARK = /^以下朱批锚定不到可批注行/;
+
+export const isDeskBody = (body: string): boolean => DESK_MARK.test(body) || DESK_FALLBACK_MARK.test(body);
+
 // —— 原始形状（只声明真正用到的字段，故意不引 Octokit 类型，保持本模块可脱离网络测试）——
 
 export interface RawReview {
   id: number;
   body?: string | null;
+  submitted_at?: string | null;
 }
 
 export interface RawInlineComment {
@@ -77,6 +92,8 @@ export interface ConversationItem {
   body: string;
   author: string | null;
   createdAt: string;
+  /** true = 确定是他发的（zhupi 降级并入总批的朱批）。普通总批判不了，为 false。 */
+  fromDesk?: boolean;
   /**
    * 会话区没有任何判别信号（createIssueComment 裸发 body），所以：
    *   inferred = 它后面还有别的总批，推测有人接过话了
@@ -111,7 +128,7 @@ export interface AttentionItem {
   id: number;
   preview: string;
   createdAt: string;
-  why: 'no-reply' | 'last-word-unclear';
+  why: 'no-reply' | 'last-word-unclear' | 'reply-author-unclear';
 }
 
 const PREVIEW_LEN = 80;
@@ -132,7 +149,22 @@ export function reviewBodyById(reviews: RawReview[]): Map<number, string> {
 export function isFromDesk(c: RawInlineComment, bodies: Map<number, string>): boolean {
   const rid = c.pull_request_review_id;
   if (rid == null) return false;
-  return DESK_MARK.test(bodies.get(rid) ?? '');
+  return isDeskBody(bodies.get(rid) ?? '');
+}
+
+/**
+ * 被 zhupi 降级塞进 review body 的朱批。zhupi 自己的说法就是「并入总批」，
+ * 所以按总批处理——而且这类**确定是他发的**（带 zhupi 的前缀），作者不用猜。
+ */
+export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
+  return reviews
+    .filter((r) => DESK_FALLBACK_MARK.test(r.body ?? ''))
+    .map((r) => ({
+      id: r.id,
+      body: (r.body ?? '').replace(DESK_FALLBACK_MARK, '（朱批锚不到行，zhupi 并入总批）'),
+      created_at: r.submitted_at ?? '',
+      user: null,
+    }));
 }
 
 /** 根批注：in_reply_to_id 缺失或为 null。**不能写 === null**，实测该 key 会整个缺失。 */
@@ -250,13 +282,19 @@ export function buildInlineThreads(
 
 // —— 总批 ——
 
-export function classifyConversation(items: RawIssueComment[]): ConversationItem[] {
-  const sorted = [...items].sort((a, b) => a.created_at.localeCompare(b.created_at));
+export function classifyConversation(
+  items: RawIssueComment[],
+  deskNotes: RawIssueComment[] = [],
+): ConversationItem[] {
+  const deskIds = new Set(deskNotes.map((d) => d.id));
+  const sorted = [...items, ...deskNotes].sort((a, b) => a.created_at.localeCompare(b.created_at));
   return sorted.map((c, i) => ({
     id: c.id,
     body: c.body,
     author: c.user?.login ?? null,
     createdAt: c.created_at,
+    fromDesk: deskIds.has(c.id),
+    // 降级来的确定是他发的：后面有别的总批才算可能被接过话，否则就是确定要回。
     answered: i < sorted.length - 1 ? 'inferred' : 'unknown',
   }));
 }
@@ -265,13 +303,18 @@ export function classifyConversation(items: RawIssueComment[]): ConversationItem
 
 export function countsOf(inline: InlineThread[], conversation: ConversationItem[]): Counts {
   return {
-    needsReply: inline.filter((t) => t.fromDesk && t.replies.length === 0).length,
-    // 判不了的三类：① 最后一条总批（可能是他的新话，也可能是我的回话）；
-    // ② 非朱批台来源的根批注（他从 GitHub 网页发的，与我方同形）；
-    // ③ 串的最后一句来自空 body review（同上）。
+    needsReply:
+      inline.filter((t) => t.fromDesk && t.replies.length === 0).length +
+      // 降级并入总批的朱批**确定是他发的**，后面没人接话就是确定要回。
+      conversation.filter((c) => c.fromDesk && c.answered === 'unknown').length,
+    // 判不了的：① 最后一条普通总批；② 非朱批台来源的根批注（他从 GitHub 网页发的）；
+    // ③ **朱批根批注、有回话、但最后一句不是从朱批台来的**——
+    //    他从网页在串里回一句，与我方回话完全同形。第三轮评审指出这条最坏：
+    //    他一开口，串反而变成「已回」，工具比他不说话时更安静。
     unclear:
-      conversation.filter((c) => c.answered === 'unknown').length +
-      inline.filter((t) => !t.fromDesk).length,
+      conversation.filter((c) => !c.fromDesk && c.answered === 'unknown').length +
+      inline.filter((t) => !t.fromDesk).length +
+      inline.filter((t) => t.fromDesk && t.replies.length > 0).length,
     hasFollowUp: conversation.filter((c) => c.answered === 'inferred').length,
   };
 }
@@ -284,13 +327,23 @@ export function attentionOf(inline: InlineThread[], conversation: ConversationIt
       out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'no-reply' });
     } else if (!t.fromDesk) {
       // 非朱批台来源：他从 GitHub 网页发的批注与我方自己发的完全同形，判不了。
-      // 第二轮评审实证这是明天的真实场景——zhupi 手机端还不能划句批注，他的退路就是 GitHub 网页。
       out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'last-word-unclear' });
+    } else if (t.replies.length > 0) {
+      // 朱批根 + 有回话：最后那句到底是我方回的还是他从网页追的，判不了。
+      // 预览取**最后一条回话**——「我方回话：已改」和「不对，我说的是第二段」一眼可分。
+      const last = t.replies[t.replies.length - 1]!;
+      out.push({ kind: 'inline', id: t.id, preview: preview(last.body), createdAt: last.createdAt, why: 'reply-author-unclear' });
     }
   }
   for (const c of conversation) {
     if (c.answered === 'unknown') {
-      out.push({ kind: 'conversation', id: c.id, preview: preview(c.body), createdAt: c.createdAt, why: 'last-word-unclear' });
+      out.push({
+        kind: 'conversation',
+        id: c.id,
+        preview: preview(c.body),
+        createdAt: c.createdAt,
+        why: c.fromDesk ? 'no-reply' : 'last-word-unclear',
+      });
     }
   }
   return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));

@@ -11,6 +11,7 @@ import {
   reviewBodyById,
   quoteFromHunk,
   attentionOf,
+  deskFallbackNotes,
   preview,
   type RawInlineComment,
   type RawIssueComment,
@@ -312,5 +313,75 @@ describe('第二轮评审的三处修复', () => {
   it('preview 压平空白并截断到 80 字', () => {
     expect(preview('  多余   空白\n换行  ')).toBe('多余 空白 换行');
     expect(preview('x'.repeat(200))).toHaveLength(81);
+  });
+});
+
+describe('第三轮评审：他不走朱批台的两条路（明早最可能踩的）', () => {
+  const deskId = () => pr17Reviews.find((r) => /御笔朱批/.test(r.body ?? ''))!.id;
+  const emptyId = () => pr17Reviews.find((r) => !r.body)!.id;
+
+  it('zhupi 降级把朱批塞进 review body —— 不能当没看见', () => {
+    // zhupi/src/ui.js:551：草稿写于旧版本或行号锚不到时，那些朱批不进 inline，
+    // 被塞进 review body。全部降级时 review 里零条 comment，他写的东西只在 body 里。
+    const fallback: RawReview = {
+      id: 9001,
+      body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\n这段结论我不同意',
+      submitted_at: '2026-07-29T10:00:00Z',
+    };
+    const notes = deskFallbackNotes([fallback, ...pr17Reviews]);
+    expect(notes).toHaveLength(1);
+    const conv = classifyConversation([], notes);
+    expect(conv[0]!.fromDesk).toBe(true);
+    expect(conv[0]!.body).toContain('这段结论我不同意');
+    // 确定是他发的、没人接话 → 确定要回，不是「判不了」
+    expect(countsOf([], conv).needsReply).toBe(1);
+    expect(attentionOf([], conv)[0]!.why).toBe('no-reply');
+  });
+
+  it('只要有一条降级，整批成功锚上的批注也不能被判成我方', () => {
+    // 降级时整个 review body 不再是「御笔朱批 · N 条」，
+    // 于是这一批里**成功锚上的**批注会被判成非朱批台 → answered=true → 看不见。
+    const mixed: RawReview = { id: 9002, body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\nA' };
+    const anchored: RawInlineComment = { ...pr17Comments[0]!, id: 9100, pull_request_review_id: 9002 };
+    delete (anchored as { in_reply_to_id?: unknown }).in_reply_to_id;
+    const t = buildInlineThreads([anchored], [mixed]);
+    expect(t[0]!.fromDesk).toBe(true);
+    expect(t[0]!.answered).toBe(false);
+    expect(countsOf(t, []).needsReply).toBe(1);
+  });
+
+  it('他从 GitHub 网页在串里回一句 —— 不能让串变得更安静', () => {
+    // 最坏的一种错：他一开口，串反而变成已回，工具比他不说话时更安静。
+    // 他的网页回话与我方回话完全同形（都是空 body review），所以只能标「判不了」。
+    const root = pr17Comments.filter(isRoot)[0]!;
+    const hisWebReply: RawInlineComment = {
+      ...pr17Comments[2]!, id: 9200, in_reply_to_id: root.id,
+      pull_request_review_id: emptyId(), body: '不对，我说的是第二段',
+    };
+    const t = buildInlineThreads([root, hisWebReply], pr17Reviews);
+    const c = countsOf(t, []);
+    expect(c.needsReply + c.unclear).toBeGreaterThan(0); // 绝不能两个都是 0
+    const a = attentionOf(t, []);
+    expect(a).toHaveLength(1);
+    expect(a[0]!.why).toBe('reply-author-unclear');
+    // 预览取最后一条回话，让人一眼分辨是我方的「已改」还是他的「不对」
+    expect(a[0]!.preview).toContain('不对，我说的是第二段');
+  });
+
+  it('正常已回的串仍然不进 needsReply（只进 unclear，代价可控）', () => {
+    const t = buildInlineThreads(pr17Comments, pr17Reviews);
+    const c = countsOf(t, []);
+    expect(c.needsReply).toBe(0);
+    expect(c.unclear).toBe(2);
+  });
+
+  it('降级 review 与普通总批按时间混排', () => {
+    const note: RawReview = {
+      id: 9003, body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\n晚说的',
+      submitted_at: '2026-07-29T23:00:00Z',
+    };
+    const conv = classifyConversation(pr18Conv, deskFallbackNotes([note]));
+    expect(conv[conv.length - 1]!.body).toContain('晚说的');
+    expect(conv[conv.length - 1]!.answered).toBe('unknown');
   });
 });

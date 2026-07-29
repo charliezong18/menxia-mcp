@@ -36,7 +36,7 @@ Phase 1 builds a subset of [SPEC §4.5](../../SPEC.md), plus one module the spec
 ## 2. Data flow: both tools share one path
 
 ```
-readFolder(pr) ──▶ { inline[], conversation[], unansweredCount }
+readFolder(pr) ──▶ { inline[], conversation[], counts }
                       │
       ┌───────────────┴───────────────┐
       ▼                               ▼
@@ -99,7 +99,7 @@ input:  state?: "open" | "merged"     default open
 output: {
   folders: [{
     number, title, headRefName,
-    unanswered: { inline: number, conversation: number, inferred: number }
+    unanswered: { needsReply, unclear, hasFollowUp }
   }]
 }
 ```
@@ -119,7 +119,7 @@ output: {
       answered: boolean
     }],
     conversation: [{ id, body, author, createdAt, answered: false | "inferred" }],
-    unansweredCount: number
+    counts: number
   }]
 }
 ```
@@ -169,7 +169,7 @@ The second matters most: R7 is a requirement about something *not happening*, an
 | `threads.ts` | Pure unit tests: inline answered / unanswered / self-reply; conversation alternating / two in a row / single; empty input |
 | `errors.ts` | One case per mapping |
 | Read-only guard | §7, mechanism 2 |
-| Real machine | Run against **#18** → `unanswered` must be 0 (the check R3 spells out); run against **#19** (merged, zero annotations) |
+| Real machine | Run against **#18** → `needsReply` must be 0 (the check R3 spells out); run against **#19** (merged, zero annotations) |
 
 `github.ts` gets no coverage push — it is thin and IO-heavy, and stands on the real-machine run.
 
@@ -178,3 +178,46 @@ The second matters most: R7 is a requirement about something *not happening*, an
 ## 9. Non-goals
 
 No caching, no pagination tuning, no GraphQL, no request concurrency control. All four are problems that appear at hundreds of folders; building them now buys complexity for a scale that does not exist.
+
+---
+
+## 10. Revision v3 (night of 2026-07-29, after three rounds of code review)
+
+**The conclusions of §3 and §4 changed again.** What follows was surfaced during implementation by six independent review agents using real data and local probes. The body above is left as v2; this section supersedes it.
+
+### 10.1 Authorship: there is a second marker
+
+zhupi has a **fallback path** (`zhupi/src/ui.js:545-553`): when a draft was written against an older revision (`stale = d.ref !== ref`) or its line cannot be anchored, those annotations do not become inline comments — they are folded into the review body, prefixed with "以下朱批锚定不到可批注行（或写于旧版本），并入总批：".
+
+Two consequences, both severe and silent:
+
+- **One fallback is enough** to strip the "御笔朱批 · N 条" marker from the whole review body → every *successfully anchored* annotation in that batch reads as not-from-desk → `answered=true` → invisible;
+- **If all fall back**, the review carries zero comments and his words exist only in the body → the tool reports "nothing to do here".
+
+And "an overnight draft plus a revision pushed by the agent" is the most common shape of all. So `isDeskBody` recognizes both markers, and the fallback body's content is lifted out as a conversation item (zhupi's own wording is "folded into the overall comment") — **and it is definitely his**, so authorship needs no guessing there.
+
+### 10.2 "Answered" is no longer a determinate value
+
+§3.1 claims `answered: boolean`, **a determination and not a guess**. That claim was wrong: when he replies inside a thread from the GitHub web UI, it is byte-identical in shape to an agent reply (both are empty-body reviews). The v2 rule therefore marks the thread answered — **he speaks and the tool gets quieter**, which is the worst failure mode available.
+
+Now: any desk-rooted thread **that has replies** goes into `unclear` plus `attention`, with the preview taken from the **last reply** ("our reply: fixed" versus "no, I meant the second paragraph" are trivially distinguishable). The measured cost is small: 2 extra attention items across 9 folders.
+
+### 10.3 counts renamed and redefined
+
+`unanswered / unknown / inferred` → `needsReply / unclear / hasFollowUp`. `inferred` ("presumed answered") was judged to be **lying** — when he posts two comments in a row, the first one lands there too.
+
+### 10.4 attention[] and updatedAt added
+
+Numbers alone cannot answer "which folders are waiting on me": #9's counts read 0/1/0 while the body of that item is "文档是不是有点旧了。" — a real question of his that nobody answered. A model seeing all zeros skips it. Each pending item now carries an 80-character preview, and folders are sorted by most recent activity (the only folder with a pending reply, #7, sorted last under creation order).
+
+### 10.5 The enforcement mechanism for §7 changed
+
+The text-scanning guard described in §7 **never once matched this project** — the real call is `oc.request(route, params)`: the variable is not named `octokit` and the route is a variable, so none of the three rules ever fired. Worse, `octokit.request('GET /x', { method: 'POST' })` **really does send a POST** (Octokit's options override the method; a reviewer proved it against a local server).
+
+Now: the Octokit instance is sealed in a module closure and never exported, `hook.wrap` asserts the final `method === 'GET'`, and `sanitizeParams` strips `method/url/baseUrl/request/headers`. Text scanning is demoted to an auxiliary lint. Round three tried twelve bypasses; all were blocked.
+
+### 10.6 Field-level corrections to §4
+
+- "`line` is 100% null in practice" — **not true at repo level**; #7's annotation has `line: 7`. #17 is all-null because that folder's annotations are outdated. The value logic is unchanged (`line ?? original_line`), but `outdated` now trusts GitHub's own signal first.
+- `quote` must pick a side: for `LEFT` (an annotation anchored on a deleted line) the `-` lines must be kept and the `+` lines dropped, otherwise it quotes a sentence he never highlighted.
+- Orphaned replies (root deleted or truncated away) become standalone threads rather than being silently dropped.

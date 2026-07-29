@@ -50,6 +50,11 @@ const main = async () => {
     `实得 ${JSON.stringify(f17?.inline?.map((t) => t.replies.length))}`);
   check('全部已回', f17?.inline?.every((t) => t.answered === true));
   check('counts.needsReply = 0', f17?.counts?.needsReply === 0, `实得 ${f17?.counts?.needsReply}`);
+  check('已回的串进 unclear 而不是消失（他可能从网页在串里回过）',
+    f17?.counts?.unclear === 2, `实得 ${f17?.counts?.unclear}`);
+  check('attention 里那两条的预览取自最后一条回话',
+    f17?.attention?.filter((a) => a.why === 'reply-author-unclear').length === 2,
+    JSON.stringify(f17?.attention?.map((a) => a.why)));
   check('行号回退到 original_line（非 null）', f17?.inline?.every((t) => typeof t.line === 'number'),
     `实得 ${JSON.stringify(f17?.inline?.map((t) => t.line))}`);
   check('标记为 outdated', f17?.inline?.every((t) => t.outdated === true));

@@ -11,6 +11,7 @@ import {
   buildInlineThreads,
   classifyConversation,
   countsOf,
+  deskFallbackNotes,
   type AttentionItem,
   type Counts,
   type ConversationItem,
@@ -115,7 +116,8 @@ async function hydrate(ref: RepoRef, pull: RawPull): Promise<FolderDetail> {
   ]);
 
   const inline = buildInlineThreads(comments, reviews, pull.head.sha);
-  const conversation = classifyConversation(issueComments);
+  // 把 zhupi 降级塞进 review body 的朱批一并捞出来——否则那批话在输出里根本不存在。
+  const conversation = classifyConversation(issueComments, deskFallbackNotes(reviews));
   return {
     ok: true,
     number: pull.number,
