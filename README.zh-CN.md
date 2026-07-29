@@ -7,7 +7,7 @@
 **[御笔朱批](https://github.com/charliezong18/zhupi)的 agent 侧，做成 MCP server。**<br>
 朱批是人读 AI 写的长文档、划句留批注的地方。这个仓是那个循环的另一头：agent 用来呈上文档、读回批注、逐条回话的那套工具。
 
-[设计定稿](SPEC.zh-CN.md) · [zhupi 本体](https://github.com/charliezong18/zhupi)
+[设计定稿](SPEC.zh-CN.md) · [里程碑](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi 本体](https://github.com/charliezong18/zhupi)
 
 </div>
 
@@ -15,9 +15,11 @@
 
 ## 状态：只有 spec
 
-**一行实现都还没有。** 这个仓现在只装了一份设计文档，没有代码。没有 npm 包，没有 `dist/`，没有任何能装的东西。想找一个能跑的 MCP server，请等 Phase 1 之后再来。
+**server 代码一行都还没有。** 这个仓现在只装文档，没有实现——没有 npm 包，没有 `dist/`，没有任何能装的东西。想找一个能跑的 MCP server，请等 Phase 1 之后再来。
 
-设计已定稿并经过评审，落地顺序见 [SPEC §8](SPEC.zh-CN.md)。下文用现在时描述这套东西——那是 spec 该有的写法，不代表它已经存在。
+**有一块已经上线了，而且它不属于 server**：拒绝对奏折仓裸 `gh pr create` 的[路由守卫](SPEC.zh-CN.md)。它住在 review-loop skill 里不在本仓，而且刻意先上——理由见下面「MCP 治不了什么」。
+
+进度在哪：[MILESTONES](MILESTONES.zh-CN.md) 有每阶段的完工判据和实际发生了什么；[OPEN-QUESTIONS](OPEN-QUESTIONS.zh-CN.md) 有还没定的问题和当前照着走的默认答案。下文用现在时描述这套东西——那是 spec 该有的写法，不代表它已经存在。
 
 ## 为什么做
 
