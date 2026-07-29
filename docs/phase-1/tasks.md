@@ -112,7 +112,7 @@ Not "easy first" but **"whichever is costliest to get wrong goes first"**:
 **Deliverable**: a real run, its result written into [MILESTONES](../../MILESTONES.md), and the MCP config snippet added to the README.
 
 **Exit criteria**
-- Run `read_comments` against **#18** → `unanswered` is 0 (the sample requirements R3 spells out)
+- Run `read_comments` against **#18** → `needsReply` is 0 (the sample requirements R3 spells out)
 - Run against **#19** (merged, zero annotations) → no crash, empty annotations returned
 - `list_folders` unanswered counts match a **hand count** (final acceptance for R2/R4)
 - Mounted in a real Claude Code session with both tools called successfully (R1)

@@ -57,7 +57,7 @@ readFolder(pr) ──▶ { inline[], conversation[], counts }
 
 **共用是刻意的**：R2 要求未回数与人工数一致，两个工具若各算各的，逻辑迟早分叉，而「列折说 3 条未回、读批注只列出 2 条」这种矛盾极难发现。
 
-**v1 在这里自己破了功**：给 `read_comments` 定标量 `unansweredCount`、给 `list_folders` 定三元组，换算关系从未定义 —— 双 review 指出 T6 那条比对测试因此根本写不出来。**v2 让两边返回同一个 `counts` 对象**，同名同义，比对是逐字段的。
+**v1 在这里自己破了功**：给 `read_comments` 定标量 `counts`、给 `list_folders` 定三元组，换算关系从未定义 —— 双 review 指出 T6 那条比对测试因此根本写不出来。**v2 让两边返回同一个 `counts` 对象**，同名同义，比对是逐字段的。
 
 **N+1 的取舍**：`list_folders` 要带计数就得读每折 comments，约 10 折 → 约 30 次 REST 调用（含 reviews）。接受：个人尺度、不在热路径。折数上百再换 GraphQL。
 
@@ -101,13 +101,13 @@ v1 的规则有致命缺陷：**最后一条总批几乎永远是我方回话**�
 
 v2 三态，且**语义重定义**：
 
-| 值 | 何时 | 计入 `unanswered` |
+| 值 | 何时 | 计入 `needsReply` |
 |---|---|---|
 | `"inferred"` | 后面还有别的总批 | 否 |
 | `"unknown"` | 它是最后一条 —— 无法判定是他的新意见还是我的回话 | **否** |
 | `false` | 这一阶段永不出现（需要标记才能确定） | — |
 
-**关键决定：`unanswered` 只计确定的，`unknown` 单列一栏。** 宁可少报也不谎报 —— 少报你还会去看 `unknown` 那栏；谎报会让你以为有事要办，或者更糟，让我以为没事。
+**关键决定：`needsReply` 只计确定的，`unknown` 单列一栏。** 宁可少报也不谎报 —— 少报你还会去看 `unknown` 那栏；谎报会让你以为有事要办，或者更糟，让我以为没事。
 
 为让 `unknown` 一眼可判，`read_comments` 返回带上每条总批的正文与时间。
 
@@ -126,7 +126,7 @@ v2 三态，且**语义重定义**：
 返回：{
   folders: [{
     number, title, headRefName,
-    counts: { unanswered, unknown, inferred }
+    counts: { needsReply, unclear, hasFollowUp }
   }]
 }
 ```
@@ -146,7 +146,7 @@ v2 三态，且**语义重定义**：
       answered: boolean
     }],
     conversation: [{ id, body, author, createdAt, answered: "inferred" | "unknown" }],
-    counts: { unanswered, unknown, inferred }
+    counts: { needsReply, unclear, hasFollowUp }
   }]
 }
 ```
@@ -223,8 +223,8 @@ R7 是「不发生什么」的要求，**不发生的事只能靠一条主动去
 | 实机 | 见 tasks T7，判据用真数字正向断言 |
 
 **实机的 ground truth（写死，不许「返回空也算过」）**：
-- `read_comments(17)` → inline 恰好 **2 条根批注**（他的），各挂 **1 条** reply，`answered` 全 true，`counts.unanswered = 0`
-- `read_comments(18)` → conversation **2 条**，第一条 `inferred`、第二条 `unknown`，`counts.unanswered = 0`、`counts.unknown = 1`
+- `read_comments(17)` → inline 恰好 **2 条根批注**（他的），各挂 **1 条** reply，`answered` 全 true，`counts.needsReply = 0`
+- `read_comments(18)` → conversation **2 条**，第一条 `inferred`、第二条 `unknown`，`counts.needsReply = 0`、`counts.unknown = 1`
 - `list_folders()` 里 **#10 不出现在 `merged` 结果中**（它是打回关闭不是钦此）
 
 ---
@@ -232,3 +232,46 @@ R7 是「不发生什么」的要求，**不发生的事只能靠一条主动去
 ## 9. 非目标
 
 不做缓存、不做真分页（只做「超一页就报错」）、不做 GraphQL、不做并发控制。不读 review body 的内容。这些都是「折数上百」才出现的问题。
+
+---
+
+## 10. v3 修订（2026-07-29 夜，三轮代码评审之后）
+
+**§3 与 §4 的结论又变了一次。** 下面这些是实现过程中被六个独立评审 agent 用真数据 / 本地探针打出来的，正文保持 v2 原样不改写，以此节为准。
+
+### 10.1 作者判定：多一个 marker
+
+zhupi 有一条**降级路径**（`zhupi/src/ui.js:545-553`）：草稿写于旧版本（`stale = d.ref !== ref`）或行号锚不到可批注行时，那些朱批不进 inline，被塞进 review body，前缀是「以下朱批锚定不到可批注行（或写于旧版本），并入总批：」。
+
+两个后果，都严重且静默：
+
+- **只要有一条降级**，整个 review body 就不再是「御笔朱批 · N 条」→ 这一批里**成功锚上的**批注全被判成非朱批台 → `answered=true` → 看不见；
+- **若全部降级**，review 里零条 comment，他写的东西只存在于 body 里 → 工具直接说「这折没事」。
+
+而「隔夜草稿 + agent 推过改版」正是最常见的形态。故 `isDeskBody` 认两个 marker，且降级 body 的正文被捞出来当 conversation 项（zhupi 自己的说法就是「并入总批」），并且**确定是他发的**，作者不用猜。
+
+### 10.2 「已回」不再是确定值
+
+§3.1 写着 `answered: boolean`，**确定值不是猜**。那句话是错的：他从 GitHub 网页在串里回一句，与 agent 回话完全同形（都是空 body review）。v2 的判据会因此把串标成已回 —— **他一开口，工具反而更安静**，这是最坏的一种错。
+
+现在：朱批根批注**有回话**的一律进 `unclear` + `attention`，预览取**最后一条回话**的正文（「我方回话：已改」和「不对，我说的是第二段」一眼可分）。代价实测很小：9 折只多 2 条 attention。
+
+### 10.3 counts 改名并重新定义
+
+`unanswered / unknown / inferred` → `needsReply / unclear / hasFollowUp`。`inferred`（「推测已回」）被判定为**在撒谎** —— 他连发两条时第一条也落这里。
+
+### 10.4 加 attention[] 与 updatedAt
+
+光给数字答不了「哪些折在等我」：实测 #9 的 counts 是 0/1/0，而那条的正文是「文档是不是有点旧了。」—— 他发的真问题，模型看到全 0 必然跳过。现在每条待看带 80 字预览；折按最近活动倒序（唯一有待回的 #7 在创建时间序里排最后一个）。
+
+### 10.5 §7 只读的执行机制换了
+
+§7 描述的文本扫描守卫**从没对本项目生效过** —— 真实代码是 `oc.request(route, params)`，变量不叫 `octokit`、route 是变量，三条规则一条都没命中。更要命的是 `octokit.request('GET /x', { method: 'POST' })` **真的会发 POST**（Octokit 的 options 覆盖 method，评审用本地 server 实证）。
+
+现在：Octokit 实例封在模块闭包绝不外泄 + `hook.wrap` 断言最终 `method === 'GET'` + `sanitizeParams` 剔除 `method/url/baseUrl/request/headers`。文本扫描降级为辅助 lint。第三轮试了 12 种绕法全被拦下。
+
+### 10.6 §4 的字段细节修正
+
+- 「`line` 实测 100% 为 null」——**repo 级别不成立**，#7 的批注 `line: 7`。#17 全 null 是因为那折的批注 outdated。取值逻辑不变（`line ?? original_line`），但优先信 GitHub 自己的信号判 `outdated`。
+- `quote` 要按 `side` 取侧：`LEFT`（批注锚在被删除的那一行）得留 `-` 行、滤 `+` 行，否则会引一句他根本没划的话。
+- 孤儿回话（根被删或被截断）单独成串，不静默丢弃。

@@ -46,7 +46,7 @@
 - inline：我方发的根批注**不计入待回**（R4 第三条）
 - inline：**判定不读 `user.login`** —— 把 fixture 里作者全抹成同一个值，结果不变
 - 总批：后面还有 → `"inferred"`；末条 → `"unknown"`；**永不返回 `false`**
-- `counts.unanswered` **不含** `unknown` 与 `inferred`
+- `counts.needsReply` **不含** `unknown` 与 `inferred`
 - 空输入 → 空结果不抛异常
 - 用 T0 的 #17 fixture 跑出：2 条他的根批注、各 1 条我方 reply、`unanswered = 0`
 
@@ -109,7 +109,7 @@
 ## T7 · 实机验收 + 交付可用（时间盒 60 分钟）
 
 **判据（全部为正向断言，「返回空」必然变红）**
-- `read_comments(17)` → inline **恰好 2 条**根批注，各挂 **1 条** reply，`answered` 全 `true`，`counts.unanswered = 0`
+- `read_comments(17)` → inline **恰好 2 条**根批注，各挂 **1 条** reply，`answered` 全 `true`，`counts.needsReply = 0`
 - `read_comments(18)` → conversation **恰好 2 条**，第一条 `"inferred"`、第二条 `"unknown"`，`counts.unknown = 1`
 - `list_folders({state:'merged'})` → **不含 #10**
 - 在真的 MCP 客户端里调通两个工具

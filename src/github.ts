@@ -66,7 +66,9 @@ export function resetAuthCache(): void {
 }
 
 /** 这些 key 会覆盖 Octokit 解析出来的动词与地址，一律不许调用方传。 */
-const FORBIDDEN_PARAM_KEYS = ['method', 'url', 'baseUrl', 'request'] as const;
+// headers 也剔掉：X-HTTP-Method-Override: DELETE 会原样上线（第三轮评审在本地 server 收到了）。
+// api.github.com 据信不认这个头，但我们不用自定义 header，剔掉零成本。
+const FORBIDDEN_PARAM_KEYS = ['method', 'url', 'baseUrl', 'request', 'headers'] as const;
 
 export function sanitizeParams(params: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
