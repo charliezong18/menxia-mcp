@@ -7,7 +7,7 @@
 **The agent side of [zhupi](https://github.com/charliezong18/zhupi), as an MCP server.**<br>
 zhupi is where a human reads and annotates AI-authored documents. This is the other end of that loop: the tools an agent uses to submit a document, read the annotations, and reply to each one.
 
-[Spec](SPEC.md) · [zhupi (the app)](https://github.com/charliezong18/zhupi)
+[Spec](SPEC.md) · [Milestones](MILESTONES.md) · [Backlog](BACKLOG.md) · [zhupi (the app)](https://github.com/charliezong18/zhupi)
 
 </div>
 
@@ -15,9 +15,11 @@ zhupi is where a human reads and annotates AI-authored documents. This is the ot
 
 ## Status: spec only
 
-**Nothing is implemented yet.** This repo currently contains one design document and no code. There is no npm package, no `dist/`, nothing to install. If you came here for a working MCP server, come back after Phase 1.
+**No server code exists yet.** This repo currently contains documents and no implementation — no npm package, no `dist/`, nothing to install. If you came here for a working MCP server, come back after Phase 1.
 
-The design is final and reviewed; the rollout is in [SPEC §8](SPEC.md). What follows describes what is being built, in the present tense, because that is what a spec is for — not because it exists.
+One piece *has* shipped, and it is not part of the server: the [route guard](SPEC.md) that refuses raw `gh pr create` against the folder repo. It lives in the review-loop skill, not here, and it ships first on purpose — see "What MCP does not fix" below.
+
+Where things stand: [MILESTONES](MILESTONES.md) has the per-phase exit criteria and what actually happened; [OPEN-QUESTIONS](OPEN-QUESTIONS.md) has what is still undecided and the default being proceeded on. What follows describes what is being built, in the present tense, because that is what a spec is for — not because it exists.
 
 ## Why
 
