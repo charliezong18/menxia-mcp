@@ -20,11 +20,11 @@ This round is to resolve the two things that were not resolved that time.
 
 | Benefit | Current pain |
 |---|---|
-| **Cross harness** | The skill only lives in Claude Code. agy (Antigravity), CCD, and Codex all cannot open a folder — while research-heavy lifting is increasingly being outsourced to agy |
-| **Saving context when reading comments** | "Reading comments" is currently a string of `gh api` calls plus the model manually parsing threads and inline positions, burning considerable window space every time. Returning structured JSON can compress this cost to near zero |
-| **Typed input parameters** | The five-section body, slug, and bilingual pair can be made into schema required fields; missing parameters are rejected on the spot by the MCP layer for a retry, instead of the script erroring out halfway through |
+| **Saving context when reading comments** | "Reading comments" is currently a string of `gh api` calls plus the model manually parsing threads and inline positions, burning considerable window space every time. Returning structured JSON can compress this cost to near zero. **This cost is paid on every single use, which is why it is the headline reason** |
+| **Blocking parallel collisions** | Tripped over this once on 2026-07-27 — multiple sessions touching `~/Developer/review` concurrently, checking out each other's branches, and rolling staged files into someone else's commit. The current countermeasure is a single sentence in CLAUDE.md saying "open separate worktrees when parallelizing", yet another prose reminder. See §4.2; the mechanism is a file lock, not a single process |
+| **Typed input parameters** | The five-section body, slug, and bilingual pair can be made into schema required fields; missing parameters are rejected on the spot by the MCP layer for a retry, instead of the script erroring out halfway through. Real, but modest |
 
-**Plus one thing that was originally meant to count as a benefit, but actually has to be achieved through other mechanisms:** parallel stepping on each other's toes. Tripped over this once on 2026-07-27 — multiple sessions touching `~/Developer/review` concurrently, checking out each other's branches, and rolling staged files into someone else's commit. The current countermeasure is a single sentence in CLAUDE.md saying "open separate worktrees when parallelizing", yet another prose reminder. See §4.2, the mechanism is a file lock, not a single process.
+**Cross-harness used to rank first; it was demoted to speculative on 2026-07-29.** The original argument was that the skill only lives in Claude Code while agy, CCD, and Codex cannot open a folder at all — and that the heavy lifting was increasingly outsourced to agy. In review, Charlie dropped agy, chose to focus on Claude, and put Codex at "maybe next, no rush" — **so this benefit has no consumer today**. It did not become false; it moved from "cashed immediately" to "possibly cashed some day", and therefore no longer carries argumentative weight. The three above are enough to justify the project. If it ever comes down to this one alone, re-evaluate.
 
 ---
 
@@ -169,12 +169,14 @@ The principle of `happy-session-id.sh` is to crawl up the ppid from its own proc
 
 In stdio mode, the MCP server is a child process of Claude Code, and this chain **happens to still hold**. But it is brittle:
 
-- When agy calls it, there is no happy session at all, so it will never be detected
+- A caller outside Claude Code has no happy session at all, so it will never be detected
 - `sessions.json` only accumulates and does not clean up (tested 114 entries all marked running); the hostPid of stale records has long been recycled by the OS to other processes, and colliding with it will yield the **wrong** session id
 
 The original script's handling of this is: after a hit, verify again that "this pid is indeed running happy right now". This must be preserved as-is.
 
 **Strategy: if not detected, do not embed it; absolutely do not invent one.** The button simply won't appear; silently pointing to the wrong thing is worse than nothing. Separately leave the `sessionId` input parameter for the external caller to pass explicitly.
+
+**This whole section was demoted on 2026-07-29.** Charlie's ruling: "reply to the session if you can, and if you can't, the document itself is enough for any agent to pick the discussion up" — **the real fallback is a self-contained document, not this button**. So ppid detection breaking in some future version is not an incident, and is not worth compensating machinery (see OPEN-QUESTIONS).
 
 ### 4.5 Module slicing
 
@@ -287,6 +289,6 @@ At the end of each phase, do a real-machine run (actually open a folder / actual
 | Risk | Handling |
 |---|---|
 | Rewrite loses existing fixes | §5.1 item-by-item implementation checklist + §5.2 differential test |
-| Whether agy side can mount MCP is unverified | Actually test it once at the end of Phase 1; if it cannot be mounted, the cross harness benefit is voided, and we need to re-evaluate whether Phases 3-4 are still worth it |
+| Cross-harness has no consumer today | Known and accepted (§1). The project stands on the other three benefits; if it ever comes down to this one alone, re-evaluate |
 | ppid detection fails in future Happy versions | Do not embed if not detected (existing strategy); failure manifests as the button disappearing, it will not point to the wrong thing |
 | Public repo leaks private info | This repo contains no document content; the `charliezong18/review` repo name is configurable, with the default value written in README instead of hardcoded |

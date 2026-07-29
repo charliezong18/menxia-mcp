@@ -6,8 +6,8 @@
 
 ## Open (proceeding on the default)
 
-**Can agy mount an MCP server?**
-Default: assume yes. This is the one question that can invalidate the project — cross-harness is the headline reason to build it ([SPEC §1](SPEC.md)). It is an exit criterion of Phase 1 precisely so it fails early rather than after the write tools are built. If the answer turns out to be no, phases 3–4 need re-justifying on the remaining two benefits (structured reads, typed inputs), which are real but smaller.
+**How much effort is the session backlink worth?**
+Default: leave it as is — embed it when detected, skip it when not, add no machinery for it. Charlie's ruling in review: "reply to the session if you can, and if you can't, the document itself is enough for any agent to pick the discussion up." That is, **the document being self-contained is the real fallback**; the button only saves a few steps. This demotes §4.4: ppid detection breaking in some future version is not an incident.
 
 **Should the public repo be sanitized?**
 Default: no. The spec names the private folder repo four times and carries one absolute home path in the MCP config example. Neither is a secret — the account is already public and both serve the text. Say the word if you would rather they were placeholders.
@@ -40,3 +40,5 @@ Default: both, as the `SPEC.md` / `SPEC.zh-CN.md` pair already here. The cost is
 | Concurrency mechanism | File lock plus a throwaway worktree. A stdio server is one process per session, so it cannot serialize on its own | 07-28 |
 | Session-backlink detection failing | Embed nothing. A silently wrong id is worse than a missing button | 07-28 |
 | Installation | Absolute path in the MCP config. No `npm link` — that global single pointer broke production once already | 07-28 |
+| Should agy be a consumer? | **No.** Focus on Claude; Codex is "maybe next, no rush." Cross-harness is therefore demoted from headline benefit to speculative ([SPEC §1](SPEC.md)), and Phase 1's agy-mounting criterion is deleted | 07-29 |
+| Weight of the session backlink | Demoted. A self-contained document is the real fallback; the button only saves steps. Detection breaking is not an incident | 07-29 |
