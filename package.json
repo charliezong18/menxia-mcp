@@ -1,27 +1,34 @@
 {
   "name": "zhupi-mcp",
-  "version": "1.0.0",
-  "description": "<div align=\"center\">",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "version": "0.1.0",
+  "description": "Agent-side MCP server for zhupi — the annotation desk.",
+  "license": "MIT",
+  "author": "Charlie Zong",
+  "type": "module",
+  "engines": { "node": ">=20" },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/charliezong18/zhupi-mcp.git"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "homepage": "https://github.com/charliezong18/zhupi-mcp#readme",
   "bugs": {
     "url": "https://github.com/charliezong18/zhupi-mcp/issues"
   },
-  "homepage": "https://github.com/charliezong18/zhupi-mcp#readme",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run && node scripts/print-milestones.mjs",
+    "test:watch": "vitest",
+    "smoke": "npm run build && node scripts/smoke-tools-list.mjs",
+    "diagrams": "./render-diagrams.sh"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@octokit/rest": "^21.0.0"
+  },
   "devDependencies": {
-    "@mermaid-js/mermaid-cli": "^11.16.0"
+    "@mermaid-js/mermaid-cli": "^11.16.0",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }
