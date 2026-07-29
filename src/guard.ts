@@ -6,8 +6,10 @@
 //
 // 「不发生什么」的要求，只能靠一条主动去找它的测试。
 
-/** 允许出现 octokit.* 的唯一文件。 */
-export const OCTOKIT_ALLOWED_FILE = 'github.ts';
+/** 允许出现 octokit.* 的唯一文件。**按完整相对路径匹配**——
+ *  按 basename 匹配的话，把文件命名成 github.ts 丢进任意子目录即可全豁免（第二轮评审指出，
+ *  与「别名让规则失效」是同一个坑的另一半）。 */
+export const OCTOKIT_ALLOWED_FILE = 'src/github.ts';
 
 // 注意分工：R7 的**执行机制**是 github.ts 里的运行时闸门（Octokit 实例封在闭包里 +
 // hook 断言 method === 'GET' + 剔除会覆盖动词的 params）。第一轮代码评审用本地 server
@@ -17,7 +19,7 @@ export const OCTOKIT_ALLOWED_FILE = 'github.ts';
 // 不作为唯一防线。
 
 /** 扫描时跳过的文件：本文件自己含有全部模式串，扫它必然自伤。 */
-export const SCAN_SKIP = new Set(['guard.ts']);
+export const SCAN_SKIP = new Set(['src/guard.ts']);
 
 // gh 子进程的写调用。必须容忍参数被拆成数组元素的写法——
 // execFile('gh', ['api', '-X', 'POST', …]) 里根本不存在 "-X POST" 这个连续子串。
@@ -45,8 +47,8 @@ export interface Violation {
 export function scanForMutations(files: Record<string, string>): Violation[] {
   const out: Violation[] = [];
   for (const [file, src] of Object.entries(files)) {
-    const base = file.split('/').pop() ?? file;
-    if (SCAN_SKIP.has(base)) continue;
+    const base = file;
+    if (SCAN_SKIP.has(file)) continue;
     src.split('\n').forEach((text, i) => {
       const line = i + 1;
       const code = text.replace(/\/\/.*$/, '');
@@ -97,8 +99,7 @@ export function scanForGlobalState(files: Record<string, string>, pkgJson: strin
     if (scripts[hook]) out.push({ file: 'package.json', line: 0, text: hook, why: `${hook} 会在装包时自动跑` });
   }
   for (const [file, src] of Object.entries(files)) {
-    const base = file.split('/').pop() ?? file;
-    if (SCAN_SKIP.has(base)) continue;
+    if (SCAN_SKIP.has(file)) continue;
     src.split('\n').forEach((text, i) => {
       const code = text.replace(/\/\/.*$/, '');
       if (/npm\s+link|\/usr\/local/.test(code)) {

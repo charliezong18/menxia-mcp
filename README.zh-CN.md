@@ -13,13 +13,23 @@
 
 ---
 
-## 状态：只有 spec
+## 状态：Phase 1 已上线（两个只读工具）
 
-**server 代码一行都还没有。** 这个仓现在只装文档，没有实现——没有 npm 包，没有 `dist/`，没有任何能装的东西。想找一个能跑的 MCP server，请等 Phase 1 之后再来。
+**能装、能用。** `list_folders` 与 `read_comments` 已实现并挂进 MCP 配置，96 条单测 + 38 条实机断言全绿，实机跑的是真 GitHub 数据。
 
-**有一块已经上线了，而且它不属于 server**：拒绝对奏折仓裸 `gh pr create` 的[路由守卫](SPEC.zh-CN.md)。它住在 review-loop skill 里不在本仓，而且刻意先上——理由见下面「MCP 治不了什么」。
+实测省下的上下文（对比原来那串 `gh api`）：读单折 **7.1×**，读全部 open 折 **3.9×**（41 KB → 5.8 KB）。这是建这东西的头号理由，数字站得住。
 
-进度在哪：[MILESTONES](MILESTONES.zh-CN.md) 有每阶段的完工判据和实际发生了什么；[OPEN-QUESTIONS](OPEN-QUESTIONS.zh-CN.md) 有还没定的问题和当前照着走的默认答案。下文用现在时描述这套东西——那是 spec 该有的写法，不代表它已经存在。
+尚未实现：`open_folder`（呈折）、`lint_folder`、`audit_folders`、`reply_comment` —— 见 [MILESTONES](MILESTONES.zh-CN.md) 的 Phase 2/3。
+
+**另有一块早就上线且不属于 server**：拒绝对奏折仓裸 `gh pr create` 的[路由守卫](SPEC.zh-CN.md)。它住在 review-loop skill 里，刻意先上——理由见下面「MCP 治不了什么」。
+
+装法：
+```json
+{ "mcpServers": { "zhupi": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
+```
+先 `npm install && npm run build`。认证借机器上已有的 `gh`，不需要另配 PAT。
+
+进度与未决：[MILESTONES](MILESTONES.zh-CN.md) · [OPEN-QUESTIONS](OPEN-QUESTIONS.zh-CN.md)
 
 ## 为什么做
 
@@ -43,15 +53,15 @@
 
 ## 工具面
 
-六个。**merge 刻意不在其中**——那是人在 app 里点的。
+六个，**打 ✅ 的两个已上线**。merge 刻意不在其中——那是人在 app 里点的。
 
 | 工具 | 干什么 |
 |---|---|
 | `open_folder` | 呈折全流程：开分支、commit、push、开 PR、焊入回跳标记、回读自核 |
 | `lint_folder` | 呈折前查体例 |
 | `audit_folders` | 把已经开着的全扫一遍，报缺口 |
-| `list_folders` | 列出所有折，带未回批注数 |
-| `read_comments` | 把批注读成结构化 JSON，`answered` 由服务端算好 |
+| `list_folders` ✅ | 列出所有折，按最近活动排序，带计数与待看正文预览 |
+| `read_comments` ✅ | 把批注读成结构化 JSON，作者判定与 answered 由服务端算好 |
 | `reply_comment` | 回一条批注，或发一条总批 |
 
 ## 怎么工作

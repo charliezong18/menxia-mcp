@@ -15,8 +15,14 @@ const TOOLS = [
   {
     name: 'list_folders',
     description:
-      '列出奏折仓里的折（PR），带每折的批注计数。counts.unanswered = 他发的、我方还没回话的 inline 批注数；' +
-      'counts.unknown = 最后一条总批（无法判定是他的新意见还是我方回话）；counts.inferred = 推测已回的总批。',
+      '列出奏折仓里的折（PR），按最近活动倒序，带计数与「要看一眼」的正文预览。\n' +
+      '· counts.needsReply —— 确定要回：他发的、一条回话都没有的 inline 批注\n' +
+      '· counts.unclear —— **判不了**：agent 与用户共用同一个 GitHub 账号，API 分不出作者。' +
+      '看 attention 里的 preview 自己判，别当成 0 就跳过\n' +
+      '· counts.hasFollowUp —— 后面还有别的总批。**不代表已回**（他连发两条时第一条也在这）\n' +
+      '· attention[] —— 每条待看的正文前 80 字 + 时间，够直接判断要不要处理\n' +
+      '注意：needsReply **不含总批**（总批没有判别信号，一律进 unclear）。' +
+      '坏折返回 { ok: false, error }，没有 counts。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -28,17 +34,36 @@ const TOOLS = [
   {
     name: 'read_comments',
     description:
-      '把一折（或全部 open 折）的批注读成结构化 JSON。inline 是还原好的批注串（根批注 + 我方回话），' +
-      '带引文、行号、是否已回；conversation 是会话区总批。answered 已由服务端算好，不需要再自己推。',
+      '把一折的批注读成结构化 JSON。**要读某一折就传 pr**——不传会扫全部 open 折，体积大一个量级。\n' +
+      '· inline —— 还原好的批注串：根批注 + replies（每条带 fromDesk 标明是他说的还是我方回的），' +
+      '含引文 quote、行号 line、是否 outdated\n' +
+      '· conversation —— 会话区总批，answered 只有 inferred / unknown 两值，**永远不会是 true**\n' +
+      '· counts / attention —— 与 list_folders 同名同义',
     inputSchema: {
       type: 'object',
       properties: {
-        pr: { type: 'integer', minimum: 1, description: '折号；不给则扫全部 open 折' },
+        pr: { type: 'integer', minimum: 1, description: '折号。强烈建议传——不传等于全量拉取' },
       },
       additionalProperties: false,
     },
   },
 ] as const;
+
+/**
+ * 手工挡未知入参。
+ * MCP SDK **不按 inputSchema 校验**，`additionalProperties: false` 形同虚设：
+ * 第二轮评审实测 `read_comments {number: 17}` 不报错、静默走「不传 pr」分支拉回全部 9 折。
+ * 而 `number` 是最自然的猜法——list_folders 返回里那个字段就叫 number。
+ */
+function rejectUnknownKeys(tool: string, args: Record<string, unknown>, allowed: string[]): void {
+  const extra = Object.keys(args).filter((k) => !allowed.includes(k));
+  if (extra.length === 0) return;
+  const hint = extra.includes('number') && allowed.includes('pr') ? '；折号请写成 { pr: 17 }' : '';
+  throw new ZhupiFailure({
+    kind: 'badInput',
+    what: `${tool} 只认 ${allowed.join(' / ')} 这些入参，收到 ${extra.join(' / ')}${hint}`,
+  });
+}
 
 function parseState(raw: unknown): State {
   if (raw === undefined || raw === null) return 'open';
@@ -66,10 +91,12 @@ const asText = (v: unknown) => ({ content: [{ type: 'text' as const, text: JSON.
 export async function handleTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   const ref = reviewRepo();
   if (name === 'list_folders') {
+    rejectUnknownKeys('list_folders', args, ['state']);
     const state = parseState(args.state);
     return { repo: ref.slug, state, folders: (await readAll(state, ref)).map(summarize) };
   }
   if (name === 'read_comments') {
+    rejectUnknownKeys('read_comments', args, ['pr']);
     const pr = parsePr(args.pr);
     const folders = pr === undefined ? await readAll('open', ref) : [await readFolder(pr, ref)];
     return { repo: ref.slug, folders };

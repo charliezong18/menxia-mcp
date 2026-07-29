@@ -88,8 +88,29 @@ describe('一折坏不能拖垮全仓（评审的高危）', () => {
   });
 
   it('坏折在 summarize 之后仍然可辨认', async () => {
-    const bad = { number: 9, title: 't', headRefName: 'b', error: '炸了' };
+    const bad = { ok: false as const, number: 9, title: 't', headRefName: 'b', error: '炸了' };
     expect(isFolderError(summarize(bad))).toBe(true);
+  });
+});
+
+describe('attention 与排序（第二轮可用性评审的产物）', () => {
+  it('按 updatedAt 倒序——「哪些折在等我」隐含的是「按最近动过排」', async () => {
+    const a = { ...pull(1), updated_at: '2026-07-01T00:00:00Z' };
+    const b = { ...pull(2), updated_at: '2026-07-29T00:00:00Z' };
+    const c = { ...pull(3), updated_at: '2026-07-15T00:00:00Z' };
+    get.mockImplementation(async (route: string) => (route.endsWith('/pulls') ? [a, b, c] : []));
+    expect((await readAll('open', REF)).map((f) => f.number)).toEqual([2, 3, 1]);
+  });
+
+  it('坏折带 ok:false 判别字段，模型能分辨形状', async () => {
+    get.mockImplementation(async (route: string, params: Record<string, unknown>) => {
+      if (route.endsWith('/pulls')) return [pull(1)];
+      if (route.includes('/comments')) throw new ZhupiFailure({ kind: 'tooManyComments', repo: 'o/r', pr: 1 });
+      return [];
+    });
+    const out = await readAll('open', REF);
+    expect(out[0]!.ok).toBe(false);
+    expect((out[0] as { counts?: unknown }).counts).toBeUndefined();
   });
 });
 

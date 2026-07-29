@@ -27,6 +27,9 @@ export interface RawInlineComment {
   start_line?: number | null;
   original_start_line?: number | null;
   diff_hunk?: string | null;
+  /** LEFT = 批注锚在被删除的那一行上；RIGHT/缺省 = 锚在新文件上 */
+  side?: string | null;
+  original_side?: string | null;
   body: string;
   created_at: string;
   commit_id?: string | null;
@@ -62,6 +65,8 @@ export interface InlineThread {
   body: string;
   createdAt: string;
   replies: InlineReply[];
+  /** 它的根批注不在结果里（被删或被截断）。形状怪，但总比整条消失强。 */
+  orphan?: boolean;
   answered: boolean;
 }
 
@@ -82,13 +87,38 @@ export interface ConversationItem {
 }
 
 export interface Counts {
-  /** 确定未回：他发的、没有我方回话的 inline 批注 */
-  unanswered: number;
-  /** 待定：最后一条总批 */
-  unknown: number;
-  /** 推测已回的总批，仅供参考 */
-  inferred: number;
+  /** 确定要我处理：他发的、一条回话都没有的 inline 批注 */
+  needsReply: number;
+  /** 判不了：账号共用导致无法确定是他的新话还是我方回话。**必须配合 attention 的预览看** */
+  unclear: number;
+  /**
+   * 后面还有别的总批。**不代表已回**——他连发两条时第一条也会落这里。
+   * v1 管这叫 inferred（「推测已回」），第二轮评审判定那是在撒谎，故改名。
+   */
+  hasFollowUp: number;
 }
+
+/**
+ * 需要人看一眼的东西，带正文预览。
+ *
+ * 存在的理由（第二轮可用性评审）：光给数字答不了「哪些折在等我」。
+ * 实测 #9 的 counts 是 0/1/0，而那条 unknown 的正文是「文档是不是有点旧了。」——
+ * 他发的、没人回过的真问题。数字全 0，模型看到就跳过了。
+ * 把预览带上，一眼就能判，不用再调一次 read_comments。
+ */
+export interface AttentionItem {
+  kind: 'inline' | 'conversation';
+  id: number;
+  preview: string;
+  createdAt: string;
+  why: 'no-reply' | 'last-word-unclear';
+}
+
+const PREVIEW_LEN = 80;
+export const preview = (s: string): string => {
+  const flat = s.replace(/\s+/g, ' ').trim();
+  return flat.length > PREVIEW_LEN ? `${flat.slice(0, PREVIEW_LEN)}…` : flat;
+};
 
 // —— 作者判定 ——
 
@@ -117,17 +147,20 @@ const NO_NEWLINE = '\\ No newline at end of file';
  * hunk 每行行首带 diff 标记（' ' / '+' / '-'），必须剥掉，否则引文会以 '+' 开头。
  * span > 1 用于多行划选。
  */
-export function quoteFromHunk(hunk: string | null | undefined, span = 1): string {
+export function quoteFromHunk(hunk: string | null | undefined, span = 1, side: 'LEFT' | 'RIGHT' = 'RIGHT'): string {
   if (!hunk) return '';
   let lines = hunk.split('\n');
   // no-newline 标记要**全部**过滤，不只是末行——它出现在中间时会被当正文混进引文。
   lines = lines.filter((l) => l.trim() !== NO_NEWLINE);
   if (lines[0]?.startsWith('@@')) lines = lines.slice(1);
-  // span 数的是**新文件**的行数，所以必须先滤掉删除行（'-'），只留上下文行与新增行。
-  // v1 直接取 hunk 末尾 span 行，在有删改的文件上会把已删除的旧文算进引文、
-  // 同时漏掉真正被划中的首行（评审用 '@@ -10,4 +10,4 @@ ctx/-old1/-old2/+new1/+new2' 实证）。
-  const newSide = lines.filter((l) => l.length === 0 || l[0] !== '-');
-  const pool = newSide.length > 0 ? newSide : lines;
+  // 取哪一侧由 side 决定：
+  //   RIGHT（默认）= 锚在新文件上 → 留上下文行与新增行，滤掉 '-'
+  //   LEFT          = 锚在**被删除的那一行**上 → 留上下文行与删除行，滤掉 '+'
+  // 第二轮评审抓到：v2 无条件滤 '-'，于是「他批的正是那句被删掉的话」时，
+  // 引文会变成紧随其后的新增行——引了一句他根本没划的话，而且是静默的。
+  const drop = side === 'LEFT' ? '+' : '-';
+  const picked = lines.filter((l) => l.length === 0 || l[0] !== drop);
+  const pool = picked.length > 0 ? picked : lines;
   if (pool.length === 0) return '';
   const take = Math.max(1, Math.min(span, pool.length));
   return pool
@@ -159,7 +192,12 @@ export function buildInlineThreads(
     repliesByRoot.set(rootId, arr);
   }
 
-  return roots.map((r) => {
+  // 孤儿回话：in_reply_to_id 指向的根不在本次结果里（根被删、或分页截断）。
+  // 静默丢掉就是丢数据——errors.ts 自己写着「回话变孤儿，凭空多出未回」是要防的事。
+  const rootIds = new Set(roots.map((r) => r.id));
+  const orphans = comments.filter((c) => !isRoot(c) && c.in_reply_to_id != null && !rootIds.has(c.in_reply_to_id));
+
+  const built = roots.map((r) => {
     const line = r.line ?? r.original_line ?? null;
     const startLine = r.start_line ?? r.original_start_line ?? null;
     const span = line != null && startLine != null && line >= startLine ? line - startLine + 1 : 1;
@@ -182,7 +220,7 @@ export function buildInlineThreads(
       // commit_id 只作兜底——v1 只有 commit_id 那一支，而测试从不传 headSha，
       // 于是生产走的分支在测试里覆盖率为 0（评审用变异测试实证：判据写反也全绿）。
       outdated: r.line != null ? false : headSha != null && r.commit_id != null ? r.commit_id !== headSha : true,
-      quote: quoteFromHunk(r.diff_hunk, span),
+      quote: quoteFromHunk(r.diff_hunk, span, (r.side ?? r.original_side) === 'LEFT' ? 'LEFT' : 'RIGHT'),
       body: r.body,
       createdAt: r.created_at,
       replies,
@@ -190,6 +228,24 @@ export function buildInlineThreads(
       answered: fromDesk ? lastIsOurs : true,
     };
   });
+
+  // 孤儿挂成独立串，宁可形状怪也不让批注消失。
+  const orphanThreads: InlineThread[] = orphans.map((c) => ({
+    id: c.id,
+    path: c.path,
+    line: c.line ?? c.original_line ?? null,
+    startLine: c.start_line ?? c.original_start_line ?? null,
+    fromDesk: isFromDesk(c, bodies),
+    outdated: c.line == null,
+    quote: quoteFromHunk(c.diff_hunk, 1, (c.side ?? c.original_side) === 'LEFT' ? 'LEFT' : 'RIGHT'),
+    body: c.body,
+    createdAt: c.created_at,
+    replies: [],
+    orphan: true,
+    answered: false,
+  }));
+
+  return [...built, ...orphanThreads];
 }
 
 // —— 总批 ——
@@ -209,9 +265,33 @@ export function classifyConversation(items: RawIssueComment[]): ConversationItem
 
 export function countsOf(inline: InlineThread[], conversation: ConversationItem[]): Counts {
   return {
-    // 只数「他发的、我方还没回」的。我方自己发的根批注 answered 恒为 true，不进这里。
-    unanswered: inline.filter((t) => t.fromDesk && !t.answered).length,
-    unknown: conversation.filter((c) => c.answered === 'unknown').length,
-    inferred: conversation.filter((c) => c.answered === 'inferred').length,
+    needsReply: inline.filter((t) => t.fromDesk && t.replies.length === 0).length,
+    // 判不了的三类：① 最后一条总批（可能是他的新话，也可能是我的回话）；
+    // ② 非朱批台来源的根批注（他从 GitHub 网页发的，与我方同形）；
+    // ③ 串的最后一句来自空 body review（同上）。
+    unclear:
+      conversation.filter((c) => c.answered === 'unknown').length +
+      inline.filter((t) => !t.fromDesk).length,
+    hasFollowUp: conversation.filter((c) => c.answered === 'inferred').length,
   };
+}
+
+/** 把「要人看一眼」的东西连正文预览一起摘出来。 */
+export function attentionOf(inline: InlineThread[], conversation: ConversationItem[]): AttentionItem[] {
+  const out: AttentionItem[] = [];
+  for (const t of inline) {
+    if (t.fromDesk && t.replies.length === 0) {
+      out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'no-reply' });
+    } else if (!t.fromDesk) {
+      // 非朱批台来源：他从 GitHub 网页发的批注与我方自己发的完全同形，判不了。
+      // 第二轮评审实证这是明天的真实场景——zhupi 手机端还不能划句批注，他的退路就是 GitHub 网页。
+      out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'last-word-unclear' });
+    }
+  }
+  for (const c of conversation) {
+    if (c.answered === 'unknown') {
+      out.push({ kind: 'conversation', id: c.id, preview: preview(c.body), createdAt: c.createdAt, why: 'last-word-unclear' });
+    }
+  }
+  return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
