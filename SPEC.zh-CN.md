@@ -234,14 +234,21 @@ zhupi 自己那次 vanilla JS → Preact 迁移的头号风险是「修过的东
 
 ---
 
-## 7. Hook（Phase 0，不依赖本仓）
+## 7. Hook（Phase 0，**2026-07-28 已上线**）
 
-PreToolUse on Bash，命中即拒：
+`~/.claude/skills/review-loop/guard-pr-create.sh`，挂在全局 settings.json 的 `PreToolUse(Bash)`。命中即拒：
 
-- `gh pr create` 且目标是 `charliezong18/review`
-- 直接 `gh api -X POST .../repos/charliezong18/review/pulls`
+- `gh pr create` 冲着奏折仓去的
+- `gh api -X POST .../pulls` 同上
 
-拒绝信息指向当时的正确入口——Phase 0 时指 `open-folder.sh`，Phase 4 后改指 MCP 工具。
+两条判据：**① 命令段里点名了奏折仓；② 没点名，但 `cd` 进的目录（或会话 cwd）的 origin 是奏折仓**——第二条堵的是最可能的绕法「`cd <worktree> && gh pr create`」。读操作（`pr view` / `pr list` / GET pulls）和别的仓一概不拦。
+
+拒绝信息指向当时的正确入口——现在指 `open-folder.sh`，Phase 4 后改指 MCP 工具。
+
+**实测踩到两件事，写在这里免得重犯：**
+
+- **必须按命令段判，不能按整串判。** 第一版扫整条命令字符串，结果 `gh pr create -R 别的仓 && gh pr view -R 奏折仓` 被误拦——两个关键词分属不同段。现改成按 `&& || ; |` 切段后逐段判。
+- **副作用：任何 Bash 命令只要文本里出现「create + 奏折仓」的组合就会被拦**，包括测试脚本和 grep。这是字面匹配的固有代价，不打算修（放松它就等于放松闸门）。要测就把用例写进文件再 `bash 文件`。
 
 这条独立于 MCP，先上先见效。它才是「更固定」的正解；MCP 是换载体，不是防绕过。
 
@@ -251,7 +258,7 @@ PreToolUse on Bash，命中即拒：
 
 | 阶段 | 内容 | 为什么这个顺序 |
 |---|---|---|
-| **0** | Hook 焊死路由 | 不依赖 MCP，立刻见效 |
+| **0** ✅ | Hook 焊死路由（2026-07-28 已上线，见 §7） | 不依赖 MCP，立刻见效 |
 | **1** | server 骨架 + `list_folders` + `read_comments` | **只读、零风险**，省 context 的收益马上兑现 |
 | **2** | `lint_folder` + §5.2 differential test 对齐 | 检查逻辑先站稳，才敢让它管写入 |
 | **3** | `open_folder` + `audit_folders` + `reply_comment` | 写入侧，含 flock/worktree/标记自核 |
