@@ -1,0 +1,24 @@
+%% Why the concurrency fix is a lock and not a queue.
+%% A stdio MCP server is one process per session. It cannot serialize on its own.
+sequenceDiagram
+    autonumber
+    participant A as session A<br/>own mcp process
+    participant L as flock
+    participant R as review repo
+    participant B as session B<br/>own mcp process
+
+    Note over A,B: NOT a shared daemon.<br/>Two sessions, two processes, one repo on disk.
+
+    A->>L: acquire
+    L-->>A: held
+    A->>R: throwaway worktree A
+    B->>L: acquire
+    L--xB: busy — waits, does not corrupt
+    A->>R: commit, push, open PR
+    A->>L: release, remove worktree
+    L-->>B: held
+    B->>R: throwaway worktree B
+    B->>R: commit, push, open PR
+    B->>L: release, remove worktree
+
+    Note over L,B: Without the lock this is the 2026-07-27 failure:<br/>branches checked out from under each other,<br/>staged files rolled into someone else's commit.

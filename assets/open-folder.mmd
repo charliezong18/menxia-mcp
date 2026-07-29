@@ -1,0 +1,27 @@
+%% open_folder, including every failure branch that matters.
+%% The write path is the one with the highest cost of being wrong.
+flowchart TD
+    S(["open_folder called"]) --> L{"house style lint"}
+    L -->|"fail"| E1["return findings<br/>agent fixes, retries"]
+    L -->|"pass"| K{"acquire flock"}
+    K -->|"timeout 30s"| E2["another session<br/>is opening a folder"]
+    K -->|"acquired"| W["create throwaway worktree"]
+    W --> C["copy docs and assets in<br/>agent never touches the repo"]
+    C --> B{"branch base<br/>is latest main?"}
+    B -->|"no"| WN["warn, do not block<br/>blocking pushes people to bypass"]
+    B -->|"yes"| CM
+    WN --> CM["commit and push"]
+    CM --> SI{"session id detected?"}
+    SI -->|"no"| NM["embed nothing<br/>never fabricate an id"]
+    SI -->|"yes"| MK["weld marker into body"]
+    NM --> CR
+    MK --> CR["create PR"]
+    CR --> V{"read body back<br/>marker present?"}
+    V -->|"no"| W2["warn: the body was swallowed"]
+    V -->|"yes"| OK(["return PR number<br/>+ zhupi deep link"])
+    W2 --> OK
+
+    classDef bad fill:#c0392b,stroke:#7b241c,color:#fff
+    classDef warn fill:#b9770e,stroke:#7e5109,color:#fff
+    class E1,E2 bad
+    class WN,NM,W2 warn

@@ -1,0 +1,24 @@
+%% The route guard's decision tree.
+%% The numbered steps are where each of the three shipped false positives was fixed.
+flowchart TD
+    C(["Bash command"]) --> SP["split into segments<br/>on and-and, or-or, semicolon, pipe &nbsp;(1)"]
+    SP --> EACH["for each segment"]
+    EACH --> ST["strip leading whitespace,<br/>env assignments, bash -c wrapper,<br/>absolute path prefix &nbsp;(2)(3)"]
+    ST --> G{"does it begin<br/>with gh?"}
+    G -->|"no"| A1["ALLOW<br/>git commit / echo / grep<br/>that merely mention it"]
+    G -->|"yes"| V{"pr create,<br/>or api POST on pulls?"}
+    V -->|"no"| A2["ALLOW<br/>pr view / list / merge<br/>GET pulls"]
+    V -->|"yes"| N{"segment names<br/>the folder repo?"}
+    N -->|"yes"| D["DENY<br/>point at open-folder.sh"]
+    N -->|"no"| CW{"cd target or session cwd<br/>has folder repo as origin?"}
+    CW -->|"yes"| D
+    CW -->|"no"| A3["ALLOW<br/>a different repo"]
+
+    LEG["Each numbered step exists because a false positive shipped:<br/>(1) scanned the whole command line — blocked 'create on another repo && view on this one'<br/>(2) matched the string anywhere — blocked a git commit whose message named the command<br/>(3) the stripping sed used basic-regex alternation, which BSD sed ignores —<br/>the bash -c bypass sailed through, silently. Only the test caught it."]
+
+    classDef deny fill:#c0392b,stroke:#7b241c,color:#fff
+    classDef allow fill:#1e8449,stroke:#145a32,color:#fff
+    classDef legend fill:#fdf6e3,stroke:#b9770e,color:#4d3800,text-align:left
+    class D deny
+    class A1,A2,A3 allow
+    class LEG legend
