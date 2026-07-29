@@ -1,103 +1,106 @@
-# zhupi-mcp — 御笔朱批的 agent 侧 MCP server
+**English** · [中文](SPEC.zh-CN.md)
 
-设计定稿 · 2026-07-28
+# zhupi-mcp — the agent-side MCP server for zhupi, the annotation desk
 
-配套产品：[`charliezong18/zhupi`](https://github.com/charliezong18/zhupi)（朱批台，人的一侧）。本仓是 agent 的一侧。
+Final design · 2026-07-28
+
+Companion product: [`charliezong18/zhupi`](https://github.com/charliezong18/zhupi) (zhupi, the human side). This repo is the agent side.
 
 ---
 
-## 1. 为什么做
+## 1. Why do this
 
-朱批循环的 agent 侧现在住在 `~/.claude/skills/review-loop/`：一份 8KB 的 SKILL.md 加四个 bash 脚本。2026-07-28 刚做过一轮加固——把体例从散文提醒变成脚本闸门，起因是实测「八折漏三折的回奏对标记、十一篇缺双语对」，结论是**文档提醒治不了漏执行**。
+The agent side of the zhupi loop currently lives in `~/.claude/skills/review-loop/`: an 8KB SKILL.md plus four bash scripts. On 2026-07-28, a round of hardening was just done — moving the house style from prose reminders to script gates. The trigger was observing in practice that "3 of 8 folders missed the session backlink marker, and 11 documents lacked a bilingual pair", leading to the conclusion that **documentation reminders cannot cure missed executions**.
 
-这轮要解决的是那次没解决的两件事。
+This round is to resolve the two things that were not resolved that time.
 
-**MCP 不解决「绕过」。** 闸门焊进脚本之后，剩下的漏洞是路由问题——模型可以不走那条路，直接手敲 `gh pr create`。换成 MCP 一样能绕。真正堵死路由的是 PreToolUse hook，见 §7。这两件事要分开做、分开算账，不能把 MCP 当成防绕过的手段。
+**MCP does not solve "bypassing".** After the gate was welded into the script, the remaining vulnerability is a routing issue — the model can just not take that route and manually type `gh pr create` directly. Switching to MCP can equally be bypassed. What truly blocks the route is the PreToolUse hook, see §7. These two things must be done separately and accounted for separately; MCP cannot be treated as a means to prevent bypassing.
 
-**MCP 解决的是另外三件：**
+**What MCP solves are the other three things:**
 
-| 收益 | 现状的痛 |
+| Benefit | Current pain |
 |---|---|
-| **跨 harness** | skill 只活在 Claude Code 里。agy（Antigravity）、CCD、Codex 都发不了折——而研究型重活正越来越多外包给 agy |
-| **读批注省 context** | 「读批注」现在是一串 `gh api` 调用加模型自行解析 threads 和 inline position，每次烧掉可观窗口。返回结构化 JSON 能把这块成本压到近零 |
-| **类型化入参** | 五段 body、slug、双语对能做成 schema 必填，漏参数当场被 MCP 层打回重试，而不是脚本跑到一半报错 |
+| **Cross harness** | The skill only lives in Claude Code. agy (Antigravity), CCD, and Codex all cannot open a folder — while research-heavy lifting is increasingly being outsourced to agy |
+| **Saving context when reading comments** | "Reading comments" is currently a string of `gh api` calls plus the model manually parsing threads and inline positions, burning considerable window space every time. Returning structured JSON can compress this cost to near zero |
+| **Typed input parameters** | The five-section body, slug, and bilingual pair can be made into schema required fields; missing parameters are rejected on the spot by the MCP layer for a retry, instead of the script erroring out halfway through |
 
-**加一件本来想算作收益、但实际要靠别的机制拿到的**：并行互踩。2026-07-27 栽过一次——多个 session 同时动 `~/Developer/review`，切走对方分支、把暂存文件卷进别人的 commit。现在的对策是 CLAUDE.md 里一句「并行时各开 worktree」，又一条散文提醒。见 §4.2，机制是文件锁不是单进程。
-
----
-
-## 2. 范围
-
-**做**：`open_folder`（呈折）、`lint_folder`（自查）、`audit_folders`（巡检）、`list_folders`（列折）、`read_comments`（读批注）、`reply_comment`（回话）。
-
-**不做**：
-
-- **钦此（squash merge）不做工具。** 那是 Charlie 在朱批台上点的动作，agent 侧没有理由持有这个能力。
-- **交付后的记账不做工具**（tracker 编号、STATUS.md 在途表）——那些散落在不同 vault 位置，属于 skill 的散文职责，不适合固化成 schema。
-- **不改 zhupi 前端。** 本仓与 `charliezong18/zhupi` 只通过 GitHub（PR body 约定、`<!-- happy-session: -->` 标记格式）耦合，不共享代码。
+**Plus one thing that was originally meant to count as a benefit, but actually has to be achieved through other mechanisms:** parallel stepping on each other's toes. Tripped over this once on 2026-07-27 — multiple sessions touching `~/Developer/review` concurrently, checking out each other's branches, and rolling staged files into someone else's commit. The current countermeasure is a single sentence in CLAUDE.md saying "open separate worktrees when parallelizing", yet another prose reminder. See §4.2, the mechanism is a file lock, not a single process.
 
 ---
 
-## 3. 工具面
+## 2. Scope
 
-统一约定：所有工具的错误返回**面向模型可执行**——「`docs/foo.md` 缺中文对子 `docs/foo.zh-CN.md`」这种，模型读完能直接自己修了重试，不返回 stack trace。
+**In scope**: `open_folder` (open a folder), `lint_folder` (self-check), `audit_folders` (audit), `list_folders` (list folders), `read_comments` (read comments), `reply_comment` (reply).
 
-### 3.1 `open_folder` — 呈折
+**Out of scope**:
+
+- **Final approval (squash merge) will not be made into a tool.** That is an action clicked by Charlie on zhupi; there is no reason for the agent side to possess this capability.
+- **Post-delivery bookkeeping will not be made into a tool** (tracker numbers, STATUS.md in-flight tables) — those are scattered across different vault locations and are prose responsibilities belonging to the skill, unsuitable for solidifying into a schema.
+- **Do not modify the zhupi frontend.** This repo and `charliezong18/zhupi` are only coupled through GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
+
+---
+
+## 3. Tool surface
+
+Universal convention: error returns from all tools must be **actionable for the model** — like "`docs/foo.md` is missing its Chinese pair `docs/foo.zh-CN.md`", so the model can read it, fix it directly itself, and retry, rather than returning a stack trace.
+
+### 3.1 `open_folder` — open a folder
 
 ```
-title:      string              奏折标题
+title:      string              folder title
 body: {
-  destination: string          目的地（进 vault / 发某仓 issue / 发邮件 …）
-  directLink:  string?         直达链
+  destination: string          where it goes (vault / issue in some repo / email …)
+  directLink:  string?         direct link
   tldr:        string          TLDR
-  decisions:   string          待你拍板
-  howto:       string          怎么用
+  decisions:   string          what needs your call
+  howto:       string          how to use it
 }
-docs:       string[]           本机绝对路径，双语一对都要给
-assets:     string[]?          本机绝对路径，正文引用的图
-sessionId:  string?            覆盖用；不给则服务端自行探测，探不到就不埋
+docs:       string[]           local absolute paths; give both halves of the bilingual pair
+assets:     string[]?          local absolute paths; images referenced by the text
+sessionId:  string?            override; if omitted the server detects it, and embeds nothing if it cannot
 ```
 
-返回：PR 号、PR URL、朱批台深链 `https://charliezong18.github.io/zhupi/?pr=<n>`、lint 报告。
+Returns: PR number, PR URL, deep link to zhupi `https://charliezong18.github.io/zhupi/?pr=<n>`, and the lint report.
 
-**`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
+**`docs` passes paths, not full text**, this is deliberate. Running on the same machine, the server itself copies the files into the worktree it manages; the agent never touches `~/Developer/review` at all — this is the only way to truly block stepping on each other's toes. Passing the full text via tool input not only wastes tokens, but also leaves the agent with the mental model of "I can write into that repo myself".
 
-拷入位置固定：`docs` 落 `docs/<basename>`，`assets` 落 `docs/assets/<basename>`——正文里按 `assets/` 打头的相对路径引用，与现有仓内布局一致。
+The copy-in location is fixed: `docs` land in `docs/<basename>`, `assets` land in `docs/assets/<basename>` — the text references them by relative paths beginning with `assets/`, consistent with the existing in-repo layout.
 
-### 3.2 `lint_folder` — 呈折前自查
+### 3.2 `lint_folder` — self-check before you open a folder
 
 ```
-docs:    string[]     本机绝对路径
+docs:    string[]     local absolute paths
 assets:  string[]?
 ```
 
-返回：结构化 findings[]，每条含 `severity: error | warn`、`rule`、`message`、`file`。规则清单见 §5.1。
+Returns: structured findings[], each containing `severity: error | warn`, `rule`, `message`, `file`. See §5.1 for the rule list.
 
-**能查的规则少一条。** 现有 `folder-lint.sh` 是在奏折仓工作树里跑的，靠 `git diff origin/main...HEAD` 拿本折文档，因而能做「分支基点」检查。`lint_folder` 拿到的是散落在本机的路径、不在任何相关 git 树里，所以它只跑规则 1-4（双语对 / 互链头 / `.payload` 例外 / 断图）。**「分支基点」只在 `open_folder` 内部跑**——那时 server 已经有自己的 worktree，git 上下文齐备。这个差异要在 `lint_folder` 的返回里显式声明，否则会给出「体例合格」的假安心。
+**One less rule can be checked.** The existing `folder-lint.sh` runs inside the folder repo's worktree, getting this folder's documents via `git diff origin/main...HEAD`, so it can do the "branch base" check. `lint_folder` receives paths scattered across the local machine, not in any relevant git tree, so it only runs rules 1-4 (bilingual pair / cross-link header / `.payload` exception / broken image). **"branch base" is only run inside `open_folder`** — by then the server already has its own worktree, and the git context is complete. This discrepancy must be explicitly declared in the return of `lint_folder`, otherwise it will give a false sense of security that the "house style is compliant".
 
-### 3.3 `audit_folders` — 存量巡检
-
-```
-fix: boolean?    默认 false。true 时补机械可补的（回奏对标记、draft 转正）
-```
-
-返回：每折的体例缺口。双语缺口只报不补（要翻译，机器补不了）。
-
-### 3.4 `list_folders` — 列折 / 「他批了吗」
+### 3.3 `audit_folders` — audit of folders already open
 
 ```
-state: "open" | "merged"    默认 open
+fix: boolean?    default false. When true, patches what is mechanically patchable
+                 (session backlink marker, converting drafts to ready)
 ```
 
-返回：折号、标题、分支、**未回批注数**。
+Returns: the house style gaps for each folder. Bilingual gaps are only reported, not filled (requires translation, machines cannot fill it).
 
-### 3.5 `read_comments` — 读批注
+### 3.4 `list_folders` — list folders / "has he reviewed it?"
 
 ```
-pr: number?    不给 = 扫全部 open 折
+state: "open" | "merged"    default open
 ```
 
-返回：
+Returns: folder number, title, branch, and **number of unanswered comments**.
+
+### 3.5 `read_comments` — read comments
+
+```
+pr: number?    omit = sweep all open folders
+```
+
+Returns:
 
 ```
 folders: [{
@@ -108,162 +111,162 @@ folders: [{
 }]
 ```
 
-**`answered` 由服务端算，不返回原始列表让模型自己判。** 「没有我方 reply 的 inline 批注 = 未处理」这个判断现在靠模型每次重新推，是最容易漏的一步。Charlie 在会话区整条列意见（不划行）也算批注，所以 `conversation` 同样带 `answered`。
+**`answered` is calculated by the server, not returning the raw list for the model to judge by itself.** The judgment that "an inline comment without our reply = unhandled" currently relies on the model re-deducing it every time, which is the most easily missed step. Charlie listing opinions in the conversation area as a whole (without highlighting lines) also counts as comments, so `conversation` similarly carries `answered`.
 
-### 3.6 `reply_comment` — 回话
+### 3.6 `reply_comment` — reply
 
 ```
 pr:        number
-commentId: number?    省略 = 发总批（conversation comment）
+commentId: number?    omit = post an overall comment (PR conversation comment)
 body:      string
 ```
 
-省掉 `commentId` 就是发总批，不单开一个工具。给了 `commentId` 走 `POST /pulls/{n}/comments/{id}/replies`，接成批注串而不是新开一条。
+Omitting `commentId` means posting an overall comment; no separate tool is added just for that. Giving `commentId` hits `POST /pulls/{n}/comments/{id}/replies`, appending to the comment thread instead of opening a new one.
 
 ---
 
-## 4. 架构
+## 4. Architecture
 
-Node 20 + TypeScript，`@modelcontextprotocol/sdk`，stdio transport。
+Node 20 + TypeScript, `@modelcontextprotocol/sdk`, stdio transport.
 
-### 4.1 装法
+### 4.1 Installation method
 
-MCP 配置里写绝对路径：
+Write the absolute path in the MCP config:
 
 ```json
 { "command": "node", "args": ["/Users/charliezong/Developer/zhupi-mcp/dist/index.js"] }
 ```
 
-**不用 `npm link`。** 2026-07-24 栽过——全局单指针被抢走，线上回退，收拾半天。全局单指针类操作一律不进这个项目。
+**Do not use `npm link`.** Tripped over this on 2026-07-24 — the global singleton pointer was hijacked, causing a production rollback and taking ages to clean up. Operations resembling a global singleton pointer absolutely do not enter this project.
 
-奏折仓（默认 `charliezong18/review`）与本地 checkout 路径（默认 `~/Developer/review`）走环境变量 `ZHUPI_REVIEW_REPO` / `ZHUPI_REVIEW_PATH`，不硬编码——本仓是公开的。
+The folder repo (default `charliezong18/review`) and the local checkout path (default `~/Developer/review`) are passed through environment variables `ZHUPI_REVIEW_REPO` / `ZHUPI_REVIEW_PATH`, not hardcoded — this repo is public.
 
-### 4.2 并发：文件锁，不是单进程
+### 4.2 Concurrency: file lock, not single process
 
-**先纠正一个想当然：stdio 型 MCP server 是每个会话各起一个进程，不是共享常驻的**，所以它天然做不到跨 session 排队。要防互踩得靠：
+**First, correct an assumption: a stdio-based MCP server spawns a separate process for each session, it is not a shared resident process**, so it naturally cannot queue across sessions. To prevent stepping on each other's toes, we must rely on:
 
-- `flock` 锁 `~/Developer/review`（锁文件放仓外，如 `~/.zhupi-mcp/review.lock`）
-- 每次 `open_folder` 在锁内开临时 worktree，用完即收
-- 锁等待超时返回可读错误，让调用方知道是另一个 session 在呈折，而不是挂死
+- `flock` locking `~/Developer/review` (the lock file is placed outside the repo, e.g., `~/.zhupi-mcp/review.lock`)
+- Every time `open_folder` opens a temporary worktree inside the lock, tearing it down immediately after use
+- Lock wait timeout returns a readable error, letting the caller know another session is opening a folder, rather than hanging dead
 
-`worktree.ts` 是**唯一**碰 `~/Developer/review` 的模块。
+`worktree.ts` is the **only** module that touches `~/Developer/review`.
 
-### 4.3 GitHub 接入
+### 4.3 GitHub integration
 
-Octokit，token 从 `gh auth token` 现取，不另管一份 PAT——机器上 `gh` 早就认证好了，多一份 PAT 就多一个过期源。401 时重取一次再重试。
+Octokit, token is fetched on the fly from `gh auth token`, without separately managing a PAT — `gh` on the machine is already authenticated, and an extra PAT means an extra source of expiration. On 401, re-fetch once and retry.
 
-（zhupi 前端用 fine-grained PAT 是因为它跑在浏览器里，没有 `gh` 可用。两边不共享凭据，也不该共享。）
+(The zhupi frontend uses a fine-grained PAT because it runs in the browser, where `gh` is not available. The two sides do not share credentials, nor should they.)
 
-### 4.4 「回奏对」标记的探测
+### 4.4 Detection of the "session backlink" marker
 
-`happy-session-id.sh` 的原理是从自身进程沿 ppid 往上爬，拿每一级 pid 撞 `~/.happy/sessions.json` 里各会话记的 hostPid。
+The principle of `happy-session-id.sh` is to crawl up the ppid from its own process, taking each level's pid to collide with the hostPid recorded for each session in `~/.happy/sessions.json`.
 
-stdio 模式下 MCP server 是 Claude Code 的子进程，这条链**碰巧仍然成立**。但它脆：
+In stdio mode, the MCP server is a child process of Claude Code, and this chain **happens to still hold**. But it is brittle:
 
-- agy 调用时根本没有 happy 会话，永远探不到
-- `sessions.json` 只累加不清理（实测 114 条全标 running），陈旧记录的 hostPid 早被 OS 回收给别的进程，撞上就会给出**错的**会话 id
+- When agy calls it, there is no happy session at all, so it will never be detected
+- `sessions.json` only accumulates and does not clean up (tested 114 entries all marked running); the hostPid of stale records has long been recycled by the OS to other processes, and colliding with it will yield the **wrong** session id
 
-原脚本对此的处置是：命中后再验一句「这个 pid 现在跑的确实是 happy」。这条必须原样保留。
+The original script's handling of this is: after a hit, verify again that "this pid is indeed running happy right now". This must be preserved as-is.
 
-**策略：探不到就不埋，绝不编。** 按钮不出现而已；静默指错比没有更糟。另留 `sessionId` 入参给外部调用方显式传。
+**Strategy: if not detected, do not embed it; absolutely do not invent one.** The button simply won't appear; silently pointing to the wrong thing is worse than nothing. Separately leave the `sessionId` input parameter for the external caller to pass explicitly.
 
-### 4.5 模块切分
+### 4.5 Module slicing
 
-| 模块 | 职责 | 依赖 |
+| Module | Responsibility | Dependencies |
 |---|---|---|
-| `lint.ts` | 体例检查，**纯函数**：吃文件清单 + git 信息，吐 findings[]。无 IO | 无 |
-| `worktree.ts` | flock + 临时 worktree 生命周期。唯一碰 review 仓的地方 | fs, child_process(git) |
-| `body.ts` | 五段 body 组装、标记焊入、**自核**回读 | github.ts |
-| `session.ts` | ppid 爬取，探不到返回 null | fs, child_process(ps) |
-| `github.ts` | Octokit 包装 | @octokit/rest |
-| `index.ts` | tool 注册与入参校验，不含业务逻辑 | 全部 |
+| `lint.ts` | house style check, **pure function**: takes file list + git info, spits findings[]. No IO | None |
+| `worktree.ts` | flock + temporary worktree lifecycle. The only place that touches the review repo | fs, child_process(git) |
+| `body.ts` | Five-section body assembly, marker welding, **self-verified** readback | github.ts |
+| `session.ts` | ppid crawling, returns null if not detected | fs, child_process(ps) |
+| `github.ts` | Octokit wrapper | @octokit/rest |
+| `index.ts` | tool registration and input validation, contains no business logic | All |
 
-`lint.ts` 无 IO 是刻意的——它是规则最多、最需要密集单测的一块，把 IO 挡在外面才测得动。
+`lint.ts` having no IO is deliberate — it is the piece with the most rules and the most need for intensive unit testing; blocking IO on the outside is the only way to make it testable.
 
 ---
 
-## 5. 移植验收
+## 5. Porting acceptance
 
-zhupi 自己那次 vanilla JS → Preact 迁移的头号风险是「修过的东西悄悄丢失」，为此做了三轮逐条核实存活。这次重写同样适用。
+The number one risk in zhupi's own vanilla JS → Preact migration was "fixed things silently getting lost", for which three rounds of line-by-line survival verification were done. This rewrite is equally subject to the same.
 
-### 5.1 照实现移植，不照文档移植
+### 5.1 Port according to implementation, not documentation
 
-读完 `folder-lint.sh` 与 `open-folder.sh` 实现，**已确认三处文档与实现的漂移**——这是本条规矩的直接证据，移植时必须以下表的「实现真相」为准，另见 §5.3 已决事项。
+Having read the `folder-lint.sh` and `open-folder.sh` implementations, **three places of drift between documentation and implementation have been confirmed** — this is direct evidence for this rule. When porting, you must follow the "Implementation truth" in the table below; also see the decisions in §5.3.
 
-| # | 规则 | SKILL.md 声称 | 实现真相 |
+| # | Rule | SKILL.md claims | Implementation truth |
 |---|---|---|---|
-| 1 | 双语一对 | 「**先判原文语言再定方向**——对外草稿本来就是英文，反了就白翻」 | **只查两个文件都存在**，不查内容语言。方向判错完全不拦 |
-| 2 | 互链头 | 英文版首行 `**English** · [中文](<slug>.zh-CN.md)`；中文版首行 `[English](<slug>.md) · **中文**` | 一致，逐字符匹配（`grep -qxF` / 锚定正则） |
-| 3 | **`.payload` 例外** | **文档里没有这条** | `docs/.payload`（或 `.payload`）登记的「待发正文」免英文版互链头（加了会把那行一起贴进对外 issue）；但其中文版**必须**含「不要从本页复制」横幅，缺则报错 |
-| 4 | 图一起搬 | 正文引用的 `assets/**` 必须真在仓里 | 一致，但只匹配 markdown 链接语法的引用，**HTML `<img src>` 不查**；且**不跳过代码块与 inline code**，见下 |
-| 5 | 分支基点 | 「警告 + 列出已在 main 上的文档」 | 一致，刻意不阻断（阻断会把人逼向绕过闸门，pre-push 那次的教训） |
-| 6 | PR body 五段 | 「**缺项也拦**」 | **只 `echo ⚠` 到 stderr，照开不误**。脚本第 27 行注释也写「缺项也拦」，与第 29 行代码自相矛盾 |
-| 7 | 不许 draft | `audit-folders.sh --fix` 转正 | 一致 |
+| 1 | bilingual pair | "**First determine the original language then decide the direction** — the outbound draft is originally English anyway; if reversed, the translation is wasted" | **Only checks that both files exist**, does not check content language. A wrong direction is not blocked at all |
+| 2 | cross-link header | English version first line `**English** · [中文](<slug>.zh-CN.md)`; Chinese version first line `[English](<slug>.md) · **中文**` | Consistent, character-by-character match (`grep -qxF` / anchored regex) |
+| 3 | **`.payload` exception** | **Not present in the documentation** | The "outbound payload" registered in `docs/.payload` (or `.payload`) is exempt from the English version cross-link header (adding it would paste that line into the external issue as well); but its Chinese version **must** contain the "do not copy from this page" banner, erroring out if missing |
+| 4 | Move images together | The `assets/**` referenced in the text must actually be in the repo | Consistent, but only matches markdown link syntax; **HTML `<img src>` is not checked**; and it **does not skip code blocks or inline code**, see below |
+| 5 | branch base | "Warning + list documents already on main" | Consistent, deliberately not blocking (blocking would force people to bypass the gate, a lesson from that time with pre-push) |
+| 6 | Five-section PR body | "**Block on missing sections too**" | **Only `echo ⚠` to stderr, opens regardless**. The comment on line 27 of the script also says "block on missing sections too", self-contradicting with the code on line 29 |
+| 7 | No drafts allowed | `audit-folders.sh --fix` converts to ready | Consistent |
 
-另外三处实现问题，移植时保留或明确改掉：
+Three other implementation problems, retain or explicitly change them when porting:
 
-- **断图检查不跳代码块与 inline code——本折亲身踩到。** 这份 spec 第一次呈折就被 lint 拦下，报了两张「断图」，实际是正文里用来说明规则本身的字面量例子（写在 inline code 里）。一篇讲 lint 规则的文档过不了 lint，因为 lint 不认代码跨度。**TS 版扫图片引用前必须先剥掉 fenced code block 与 inline code**——这与 §5.3 #1 的语言检测用的是同一套剥离逻辑，应共用一个 helper。当时的绕法是改写正文措辞躲开字面量，那是权宜。
-- `git fetch -q origin ... || true`：网络失败时**静默继续**，此时 `origin/main` 是陈旧的，基点检查基于旧数据得出结论。TS 版应至少把「fetch 失败、结论可能过期」作为 warn 报出来。
-- 五段检查用 `grep -q "$sec"`，即**段名出现在 body 任何位置**即算通过，不要求是标题。TS 版应按标题匹配。
+- **The broken-image check does not skip code blocks or inline code — this very folder tripped on it.** The first attempt to open this spec was blocked by the lint, which reported two "broken images" that were in fact the literal examples used in the text to explain the rule itself (written inside inline code). A document about the lint rules cannot pass the lint, because the lint does not recognize code spans. **The TS version must strip fenced code blocks and inline code before scanning for image references** — this is the same stripping logic used by the language check in §5.3 #1, and the two should share one helper. The workaround at the time was to reword the text to avoid the literal, which is a stopgap.
+- `git fetch -q origin ... || true`: **silently continues** on network failure; at this time `origin/main` is stale, and the base check derives its conclusion based on old data. The TS version should at least report "fetch failed, conclusion might be stale" as a warn.
+- The five-section check uses `grep -q "$sec"`, meaning **the section name appearing anywhere in the body** counts as passing; it does not require it to be a heading. The TS version should match by heading.
 
 ### 5.2 Differential test
 
-拿现存的全部 open 折加一批故意造坏的样本（每条规则至少一个必失败用例），**老脚本与新 TS 各跑一遍，输出逐条对齐**。
+Take all existing open folders plus a batch of intentionally corrupted samples (at least one must-fail test case per rule), **run the old script and the new TS each once, and align the outputs item by item**.
 
-有差异只有两种结局：是 bug 就修；是刻意改进就写进本文档说清为什么。目前已知的刻意改进有两处：**#1 加语言方向比例检测**（§5.3）、**#4 图片引用兼查 HTML `<img src>`**。**对不齐不许上线。**
+There are only two outcomes for differences: if it is a bug, fix it; if it is a deliberate improvement, document it here to explain why. Two deliberate improvements are known so far: **#1 adding the language-direction ratio check** (§5.3), and **#4 having the image-reference check also cover HTML `<img src>`**. **Do not deploy if they do not align.**
 
-顺带一个白拿的好处：macOS bash 3.2 没有 `mapfile`、没有关联数组这类坑在 TS 里根本不存在（`folder-lint.sh` 顶部专门注释了这点）。但这也意味着**不能照抄逻辑结构**——bash 版里那些 `while read` 子 shell 变量不回传的规避写法（第 74-77 行把 FAIL 写进临时文件再 grep 回来）在 TS 里是纯噪音，重写时逻辑要重新组织，因此更要靠 differential 兜底。
+By the way, a free benefit: pitfalls like macOS bash 3.2 lacking `mapfile` and associative arrays simply do not exist in TS (this is specifically commented at the top of `folder-lint.sh`). But this also means **the logical structure cannot be blindly copied** — those workaround patterns in the bash version where `while read` subshell variables do not propagate back (lines 74-77 writing FAIL to a temp file and grepping it back) are pure noise in TS. The logic must be reorganized when rewriting, hence relying even more on differential testing as a safety net.
 
-### 5.3 已决（2026-07-28 Charlie 拍板）
+### 5.3 Decided (Charlie's call, 2026-07-28)
 
-- **#1 语言方向：按比例查。** 先剥掉 fenced code block 与 inline code，再算剩余正文的中日韩字符占比——英文版 >30% 报错，中文版 <30% 报错（顺带能抓漏译）。选比例而非「出现成段中文即报错」，是因为术语表、专名、中英混排的行撑不到阈值，误伤基本躲得开；而整篇翻反了必被抓。**这是相对现有脚本的收紧**，在 differential test 里属于「刻意改进」，见 §5.2。
+- **#1 Language direction: check by ratio.** Strip fenced code blocks and inline code first, then compute the CJK character ratio of the remaining prose — error if the English version is >30%, error if the Chinese version is <30% (which also catches untranslated leftovers). Ratio rather than "error on any run of Chinese" because glossaries, proper nouns, and mixed-script lines do not reach the threshold, so false positives are largely avoided — while a whole document translated in the wrong direction is always caught. **This is a tightening relative to the current script**, and counts as a deliberate improvement in the differential test; see §5.2.
 
-- **#6 五段缺项：警告，不拦。** 即代码是对的，**错的是文档**——SKILL.md 体例表第 5 行与 `open-folder.sh` 第 27 行注释都把它写成了「拦」。理由：body 段落是给人读的，缺了不会像双语对那样直接搞坏 zhupi 的功能；而拦得太死会把人逼向绕过闸门（pre-push 那次的教训）。**这不属于移植工作，是一笔欠账的文档修正**，进 §8 Phase 4 一并还。
-
----
-
-## 6. 测试
-
-- **`lint.ts` 单测（vitest）**：§5.1 每条规则至少一个通过用例 + 一个必失败用例。这是唯一强制覆盖的模块。
-- **Differential test**：§5.2，作为一次性上线闸门保留在仓里，可重跑。
-- **`body.ts` 自核路径**：`gh` 有静默吞 body 的前科（`open-folder.sh` 第 42-45 行专门为此写了回读校验），须有一个 mock 掉「创建成功但 body 丢了」的用例。
-- **`session.ts`**：陈旧 hostPid 撞到别的进程时必须返回 null 而不是那个 id。
-- 不追求 `github.ts` / `worktree.ts` 的高覆盖——它们薄且重 IO，靠上面三块和实机跑一遍站住。
+- **#6 Missing five sections: warn, do not block.** That is, the code is right and **the documentation is wrong** — row 5 of the SKILL.md house-style table and the comment on line 27 of `open-folder.sh` both state it as "block". Rationale: the body sections are for a human to read; missing one does not break zhupi's functionality the way a missing bilingual pair does, and blocking too hard pushes people into bypassing the gate (the lesson from that time with pre-push). **This is not porting work, it is an outstanding documentation debt**, paid off in §8 Phase 4.
 
 ---
 
-## 7. Hook（Phase 0，不依赖本仓）
+## 6. Testing
 
-PreToolUse on Bash，命中即拒：
-
-- `gh pr create` 且目标是 `charliezong18/review`
-- 直接 `gh api -X POST .../repos/charliezong18/review/pulls`
-
-拒绝信息指向当时的正确入口——Phase 0 时指 `open-folder.sh`，Phase 4 后改指 MCP 工具。
-
-这条独立于 MCP，先上先见效。它才是「更固定」的正解；MCP 是换载体，不是防绕过。
+- **`lint.ts` unit tests (vitest)**: At least one passing test case + one must-fail test case per rule in §5.1. This is the only module with mandatory coverage.
+- **Differential test**: §5.2, kept in the repo as a one-time deployment gate, repeatable.
+- **`body.ts` self-verification path**: `gh` has a track record of silently swallowing the body (lines 42-45 in `open-folder.sh` specifically wrote a readback verification for this); there must be a mocked test case for "created successfully but body is lost".
+- **`session.ts`**: When a stale hostPid collides with another process, it must return null instead of that id.
+- Do not pursue high coverage for `github.ts` / `worktree.ts` — they are thin and heavy on IO, relying on the three pieces above and one run against the real thing to stand their ground.
 
 ---
 
-## 8. 落地顺序
+## 7. Hook (Phase 0, does not depend on this repo)
 
-| 阶段 | 内容 | 为什么这个顺序 |
+PreToolUse on Bash, rejects on hit:
+
+- `gh pr create` and the target is `charliezong18/review`
+- Directly `gh api -X POST .../repos/charliezong18/review/pulls`
+
+The rejection message points to the correct entrypoint at the time — in Phase 0 it points to `open-folder.sh`, after Phase 4 it will point to the MCP tool.
+
+This rule is independent of MCP; deploying it first yields immediate effects. It is the real answer to "more locked down"; MCP is just changing the vehicle, not a means to prevent bypassing.
+
+---
+
+## 8. Rollout sequence
+
+| Phase | Content | Why this sequence |
 |---|---|---|
-| **0** | Hook 焊死路由 | 不依赖 MCP，立刻见效 |
-| **1** | server 骨架 + `list_folders` + `read_comments` | **只读、零风险**，省 context 的收益马上兑现 |
-| **2** | `lint_folder` + §5.2 differential test 对齐 | 检查逻辑先站稳，才敢让它管写入 |
-| **3** | `open_folder` + `audit_folders` + `reply_comment` | 写入侧，含 flock/worktree/标记自核 |
-| **4** | 脚本退休；SKILL.md 瘦成「名词表 + 指向工具」；hook 改指 MCP；**还 §5.3 #6 那笔文档账**（SKILL.md 体例表第 5 行与 `open-folder.sh` 第 27 行注释里「五段缺项也拦」是假的，改成「警告」） | 收尾 |
+| **0** | Hook welds the route dead | Does not depend on MCP, yields immediate effects |
+| **1** | server skeleton + `list_folders` + `read_comments` | **Read-only, zero risk**, the benefit of saving context is cashed in immediately |
+| **2** | `lint_folder` + §5.2 differential test alignment | The check logic must stand firm first, before daring to let it manage writing |
+| **3** | `open_folder` + `audit_folders` + `reply_comment` | Write side, including flock/worktree/marker self-verification |
+| **4** | Script retirement; SKILL.md slims down to "glossary + pointer to tool"; hook is redirected to MCP; **pay off the documentation debt from §5.3 #6** ("block on missing sections too" is false in both row 5 of the SKILL.md house-style table and the comment on line 27 of `open-folder.sh` — change to "warn") | Wrap-up |
 
-每阶段结束跑一次实机（真开一折 / 真读一次批注），不靠单测断言「能用」。
+At the end of each phase, do a real-machine run (actually open a folder / actually read a comment once); do not rely on unit tests to assert "it works".
 
 ---
 
-## 9. 风险
+## 9. Risks
 
-| 风险 | 处置 |
+| Risk | Handling |
 |---|---|
-| 重写丢失既有修复 | §5.1 逐条实现清单 + §5.2 differential test |
-| agy 侧能否挂 MCP 未经验证 | Phase 1 结束时实测一次；挂不上则跨 harness 这条收益作废，需重估 Phase 3-4 是否还值得 |
-| ppid 探测在未来 Happy 版本失效 | 探不到就不埋（已有策略），失效表现为按钮消失，不会指错 |
-| 公开仓泄露私有信息 | 本仓不含任何文档内容；`charliezong18/review` 仓名可配置，默认值写在 README 而非硬编码 |
+| Rewrite loses existing fixes | §5.1 item-by-item implementation checklist + §5.2 differential test |
+| Whether agy side can mount MCP is unverified | Actually test it once at the end of Phase 1; if it cannot be mounted, the cross harness benefit is voided, and we need to re-evaluate whether Phases 3-4 are still worth it |
+| ppid detection fails in future Happy versions | Do not embed if not detected (existing strategy); failure manifests as the button disappearing, it will not point to the wrong thing |
+| Public repo leaks private info | This repo contains no document content; the `charliezong18/review` repo name is configurable, with the default value written in README instead of hardcoded |
