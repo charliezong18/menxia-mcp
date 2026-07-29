@@ -246,10 +246,13 @@ Two criteria: **① a command segment names the folder repo; ② it does not, bu
 
 The rejection message points to the correct entrypoint at the time — currently `open-folder.sh`, after Phase 4 the MCP tool.
 
-**Two things learned the hard way, recorded so they are not repeated:**
+**Three false positives on the way in, all the same root cause — treating "the string appears" as "this command will run." All recorded here, because rewriting this logic for the MCP version will walk into them again:**
 
-- **Judge per command segment, not per whole string.** The first version scanned the entire command line, so `gh pr create -R some-other-repo && gh pr view -R <folder repo>` was falsely blocked — the two keywords sat in different segments. Now the command is split on `&& || ; |` and each segment judged on its own.
-- **Side effect: any Bash command whose text contains the "create + folder repo" combination is blocked**, including test scripts and greps. That is the inherent cost of literal matching, and it will not be fixed — loosening it means loosening the gate. To test the guard, put the cases in a file and run `bash <file>`.
+1. **Judge per command segment, not per whole string.** The first version scanned the entire command line, so `gh pr create -R some-other-repo && gh pr view -R <folder repo>` was falsely blocked — the two keywords sat in different segments. Now the command is split on `&& || ; |` and each segment judged on its own.
+2. **The segment must actually start with a `gh` invocation.** The second version blocked the guard author's own `git commit` — the commit message named the command, and the cwd happened to be a folder-repo worktree, so both criteria were met. It now strips leading whitespace, env assignments, a `bash -c` wrapper, and any absolute-path prefix, then requires what remains to **begin with `gh`**. `git commit -m "...gh pr create..."`, `echo`, and `grep` all pass.
+3. **The stripping sed must use `-E`.** BSD sed (shipped with macOS) does not support `\|` alternation in basic regex, so that rule was dead on arrival — the `bash -c '...'` wrapper bypass sailed straight through, **silently**. Only the test caught it. `folder-lint.sh` carries a comment warning about this exact class of trap, and it still happened.
+
+The accompanying `guard-pr-create.test.sh` has 21 cases (10 must-block / 11 must-pass). Run it before touching the guard.
 
 This rule is independent of MCP; deploying it first yields immediate effects. It is the real answer to "more locked down"; MCP is just changing the vehicle, not a means to prevent bypassing.
 
