@@ -184,3 +184,55 @@ describe('fs 守卫要焊 import，不能只焊调用名（第二轮评审：三
     expect(scanForMutations({ 'scripts/acceptance.mjs': "import { rmSync } from 'node:fs'; rmSync(f);" })).toEqual([]);
   });
 });
+
+describe('fs 守卫不能被换个写法绕过（Phase 2 设计评审实测）', () => {
+  // `node:fs/promises` 原本整条穿过去。这是守卫自己犯了它要防的那个病：
+  // 「顺手换个写法」正是漏执行最自然的形态。
+  const bypass = [
+    "import { readFile } from 'node:fs/promises';",
+    "import fs from 'fs/promises';",
+    "const { readFile } = require('node:fs/promises');",
+    "const fsp = require('fs/promises');",
+    'import { readFileSync } from "node:fs";',
+    "import * as FS from 'fs';",
+  ];
+  for (const code of bypass) {
+    it(`拦得住：${code.slice(0, 42)}`, () => {
+      expect(scanForMutations({ 'src/snapshot.ts': code }).length, code).toBeGreaterThan(0);
+    });
+  }
+
+  it('processed.ts 自己不受限', () => {
+    for (const code of bypass) expect(scanForMutations({ 'src/processed.ts': code }), code).toEqual([]);
+  });
+
+  it('不误伤：名字里带 fs 的别的模块', () => {
+    for (const code of ["import x from 'fsevents';", "import y from './fs-helper.js';", "import z from 'node:os';"]) {
+      expect(scanForMutations({ 'src/snapshot.ts': code }), code).toEqual([]);
+    }
+  });
+});
+
+describe('git 写操作的作用域（2026-07-30 收窄，把边界钉住）', () => {
+  // 收窄是有代价的动作：guard 是这个项目对「静默失效」的唯一防线，
+  // 放宽一次很难收回。所以边界必须有测试写下来，不能只靠注释。
+  it('src/ 里的 git 写操作照拦', () => {
+    for (const code of ["git('push')", 'execFileSync("git", ["commit"])', 'git push origin main']) {
+      expect(scanForMutations({ 'src/snapshot.ts': code }).some((v) => v.why === 'git 写操作'), code).toBe(true);
+    }
+  });
+
+  it('src/ 里的 git **读**操作不拦（snapshot.ts 靠它采料）', () => {
+    for (const code of ["git(cwd, ['show', ref])", "git(cwd, ['diff', '--name-only'])", "git(cwd, ['fetch', '-q'])"]) {
+      expect(scanForMutations({ 'src/snapshot.ts': code }), code).toEqual([]);
+    }
+  });
+
+  it('scripts/ 造一次性样本仓不拦 —— 那些仓在 mkdtemp 里、跑完就删', () => {
+    expect(scanForMutations({ 'scripts/lint-differential.mjs': "sh('git', ['commit', '-qm', 'x'], wt);" })).toEqual([]);
+  });
+
+  it('**收窄只到 scripts/**，别的目录不享受', () => {
+    expect(scanForMutations({ 'src/tools.ts': "sh('git', ['push'])" }).length).toBeGreaterThan(0);
+  });
+});

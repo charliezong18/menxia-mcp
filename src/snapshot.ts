@@ -1,0 +1,146 @@
+// 从 git 工作树采一份 Snapshot 喂给 lint.ts。这是 lint 侧唯一碰 IO 的模块。
+//
+// **不 import fs**（tasks T4 判据）：`guard.ts` 焊死了「src/ 下除 processed.ts 不许 import fs」，
+// 而 2026-07-30 Phase 2 设计评审刚发现那条守卫拦不住 `node:fs/promises` ——
+// 「换个写法顺手绕过」正是它要防的病。所以这里一律走 git 子进程。
+//
+// 顺带一个好处（设计 §0）：读**分支树**比读脏工作树更对 ——
+// zhupi 渲染的是 GitHub 上的内容，也就是提交过的内容。
+//
+// 关于 `git fetch`：它是远端**读**，与 R8「不写远端」不冲突。
+// 老脚本 `folder-lint.sh:21` 就做这件事，这里照搬，但**失败要报**（需求 R5，规则 9）。
+// 这条网络出口不经 octokit，所以 guard.ts 的只读闸门管不到它 —— 写在这里，
+// 免得将来有人以为它是漏过去的。
+
+import { execFileSync } from 'node:child_process';
+import type { Snapshot } from './lint.js';
+
+export interface SnapshotOpts {
+  /** 工作树路径，默认 cwd */
+  worktree?: string;
+  /** 要检查的 ref，默认 HEAD。巡检时传 `origin/<branch>` */
+  ref?: string;
+  /** 基线，默认 origin/main */
+  base?: string;
+  /** PR body（呈折时传，巡检时不传） */
+  body?: string;
+  /** 跳过 fetch（巡检批量跑时只在最外层 fetch 一次） */
+  skipFetch?: boolean;
+}
+
+export class NotAGitWorktree extends Error {}
+
+function raw(cwd: string, args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+}
+
+/** 跑 git 拿**标量**（sha / 计数 / 路径清单），去掉尾部换行。失败返回 null。 */
+function tryGit(cwd: string, args: string[]): string | null {
+  try {
+    return raw(cwd, args).trimEnd();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 跑 git 拿**文件内容**，一个字节都不动。
+ *
+ * 不能复用 tryGit：它 trimEnd 掉尾部换行，那是**静默改内容**。
+ * 实测后果：`git show` 出来的正文与文件不一致，测试拿真实内容比就挂 ——
+ * 而如果测试当时是拿 trim 过的期望值写的，这个偏差会一直躺着。
+ */
+function tryFile(cwd: string, args: string[]): string | null {
+  try {
+    return raw(cwd, args);
+  } catch {
+    return null;
+  }
+}
+
+export function collect(opts: SnapshotOpts = {}): Snapshot {
+  const cwd = opts.worktree ?? process.cwd();
+  const ref = opts.ref ?? 'HEAD';
+  const base = opts.base ?? 'origin/main';
+
+  if (tryGit(cwd, ['rev-parse', '--git-dir']) === null) {
+    throw new NotAGitWorktree(`不是 git 工作树：${cwd}`);
+  }
+
+  // fetch 失败不阻断（网络断了也该能跑），但要如实报出来 —— 老脚本 `|| true` 静默继续。
+  const fetchFailed = opts.skipFetch === true ? false : tryGit(cwd, ['fetch', '-q', 'origin']) === null;
+
+  const baseSha = tryGit(cwd, ['merge-base', base, ref]);
+  const baseHead = tryGit(cwd, ['rev-parse', base]);
+  let behind = 0;
+  if (baseSha !== null && baseHead !== null && baseSha !== baseHead) {
+    behind = Number(tryGit(cwd, ['rev-list', '--count', `${baseSha}..${baseHead}`]) ?? '0') || 0;
+  }
+
+  // 只看 docs 顶层的 md，与老脚本的 `docs/*.md` 一致（**不递归** —— 那是老脚本的行为，
+  // 不是疏漏也不是刻意，只是 glob 就这样。改它属于扩大范围，不在 Phase 2 内）。
+  const diff = tryGit(cwd, ['diff', '--name-only', `${base}...${ref}`, '--', 'docs/*.md']) ?? '';
+  const changed = diff.split('\n').map((s) => s.trim()).filter(Boolean).sort();
+
+  const files = new Map<string, string>();
+  for (const f of changed) {
+    const content = tryFile(cwd, ['show', `${ref}:${f}`]);
+    if (content !== null) files.set(f, content);
+  }
+
+  // 双语对要查**对面那一半在不在**，而它可能没被本折改动（比如只改了中文版）。
+  // 所以对每个 slug 的两边都探一次存在性，不只看 changed。
+  for (const f of [...changed]) {
+    const other = f.endsWith('.zh-CN.md') ? f.replace(/\.zh-CN\.md$/, '.md') : f.replace(/\.md$/, '.zh-CN.md');
+    if (files.has(other)) continue;
+    const content = tryFile(cwd, ['show', `${ref}:${other}`]);
+    if (content !== null) files.set(other, content);
+  }
+
+  // 仓里真实存在的 assets。老脚本用 `[ -f "docs/$ref" ]`，所以引用路径是相对 docs/ 的。
+  const tree = tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'docs/assets/']) ?? '';
+  const assets = new Set(
+    tree.split('\n').map((s) => s.trim()).filter(Boolean).map((p) => p.replace(/^docs\//, '')),
+  );
+
+  // .payload：老脚本查 docs/.payload 和 .payload 两个位置。
+  const payload = [
+    tryGit(cwd, ['show', `${ref}:docs/.payload`]),
+    tryGit(cwd, ['show', `${ref}:.payload`]),
+  ]
+    .filter((s): s is string => s !== null)
+    .flatMap((s) => s.split('\n'))
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const onMain = new Set(changed.filter((f) => tryGit(cwd, ['cat-file', '-e', `${base}:${f}`]) !== null));
+
+  return {
+    files,
+    changed,
+    assets,
+    payload,
+    onMain,
+    base: { behind, fetchFailed },
+    ...(opts.body !== undefined ? { body: opts.body } : {}),
+  };
+}
+
+/**
+ * docs 下有未提交的改动吗。
+ *
+ * 为什么单列：snapshot 读的是**提交过的**内容（`git show <ref>:<path>`），
+ * 而老脚本读工作树。正常流程里 `open-folder.sh` 在 commit+push 之后才跑，两者相同；
+ * 但要是有人改完没提交就呈折，新旧结论会不一样 —— 那是差异不是 bug，
+ * 所以 CLI 会提醒一句，而不是悄悄按提交过的内容判。
+ */
+export function dirtyDocs(worktree?: string): string[] {
+  const cwd = worktree ?? process.cwd();
+  const out = tryGit(cwd, ['status', '--porcelain', '--', 'docs/']) ?? '';
+  return out.split('\n').map((s) => s.slice(3).trim()).filter(Boolean);
+}
+
+/** 巡检用：奏折仓里所有 open 折的分支名，靠调用方给。 */
+export function branchExists(worktree: string, ref: string): boolean {
+  return tryGit(worktree, ['rev-parse', '--verify', '--quiet', ref]) !== null;
+}

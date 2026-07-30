@@ -18,10 +18,11 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsc --noEmit && vitest run && node scripts/print-milestones.mjs",
+    "test": "tsc --noEmit && vitest run && node scripts/print-milestones.mjs && node scripts/print-parity.mjs",
     "test:watch": "vitest",
     "acceptance": "npm run build && node scripts/acceptance.mjs",
-    "diagrams": "./render-diagrams.sh"
+    "diagrams": "./render-diagrams.sh",
+    "differential": "npm run build && node scripts/lint-differential.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

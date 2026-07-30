@@ -9,6 +9,8 @@ import { reviewRepo } from './config.js';
 import { conversationEntries, readAll, readFolder, summarize } from './folders.js';
 import { commit, commitUnmark, storePath, type Entry } from './processed.js';
 import { ZhupiFailure } from './errors.js';
+import { hasHard, lint } from './lint.js';
+import { NotAGitWorktree, collect, dirtyDocs } from './snapshot.js';
 
 const STATE_VALUES = ['open', 'merged'] as const;
 type State = (typeof STATE_VALUES)[number];
@@ -53,6 +55,29 @@ export const TOOLS = [
       type: 'object',
       properties: {
         pr: { type: 'integer', minimum: 1, description: '折号。强烈建议传——不传等于全量拉取' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'lint_folder',
+    description:
+      '查一折的**体例**（不是内容）：双语对齐不齐、互链头对不对、有没有断图、语言方向反没反、分支基点。\n' +
+      '**只读本地 git 工作树，不打 GitHub。**\n' +
+      '两个调用方共用这一个核（需求 R7）：\n' +
+      '· 呈折前自查 —— 不传 ref，查当前分支相对 origin/main 的新增/修改文档\n' +
+      '· 存量巡检 —— 传 `ref: "origin/<分支名>"` 逐折查，不用 checkout\n' +
+      '返回 findings[]，每条带 `severity`：`hard` = 呈折会被拦；`warn` = 提醒，不阻断。\n' +
+      '**警告不等于没事**：语言方向（规则 5）是警告，但整篇翻反了也只报警告 —— ' +
+      '阈值 30% 没在真实语料上量过，先看误报率再考虑升级（design D5）。\n' +
+      '注意它查的是**已提交**的内容；未提交的改动会在 `dirtyDocs` 里列出来。\n' +
+      '「回奏对标记」和「draft 状态」不在这里 —— 那两条要打网络，归 Phase 3。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        worktree: { type: 'string', description: '奏折仓工作树路径，默认当前目录' },
+        ref: { type: 'string', description: '要查的 ref，默认 HEAD；巡检传 origin/<分支>' },
+        base: { type: 'string', description: '基线，默认 origin/main' },
       },
       additionalProperties: false,
     },
@@ -175,6 +200,36 @@ export async function handleTool(
       folders: folders.map((f) =>
         f.ok ? { ...f, handledIds: f.conversation.filter((c) => c.answered === 'handled').map((c) => c.id) } : f,
       ),
+    };
+  }
+  if (name === 'lint_folder') {
+    rejectUnknownKeys('lint_folder', args, ['worktree', 'ref', 'base']);
+    for (const k of ['worktree', 'ref', 'base'] as const) {
+      if (args[k] !== undefined && typeof args[k] !== 'string') {
+        throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串，收到 ${JSON.stringify(args[k])}` });
+      }
+    }
+    const worktree = (args.worktree as string | undefined) ?? process.cwd();
+    let findings;
+    try {
+      findings = lint(
+        collect({
+          worktree,
+          ...(args.ref !== undefined ? { ref: args.ref as string } : {}),
+          ...(args.base !== undefined ? { base: args.base as string } : {}),
+        }),
+      );
+    } catch (e) {
+      if (e instanceof NotAGitWorktree) throw new ZhupiFailure({ kind: 'badInput', what: e.message });
+      throw e;
+    }
+    return {
+      worktree,
+      ref: (args.ref as string | undefined) ?? 'HEAD',
+      ok: !hasHard(findings),
+      findings,
+      // 未提交的改动要说出来：查的是已提交内容，不同的时候「我改了它却没看见」会被当成工具坏了。
+      dirtyDocs: dirtyDocs(worktree),
     };
   }
   if (name === 'mark_handled') {
