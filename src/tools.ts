@@ -11,6 +11,8 @@ import { commit, commitUnmark, storePath, type Entry } from './processed.js';
 import { ZhupiFailure } from './errors.js';
 import { hasHard, lint } from './lint.js';
 import { NotAGitWorktree, collect, dirtyDocs } from './snapshot.js';
+import { auditFolders, openFolder, replyComment } from './submit.js';
+import type { FolderBody } from './body.js';
 
 const STATE_VALUES = ['open', 'merged'] as const;
 type State = (typeof STATE_VALUES)[number];
@@ -110,6 +112,77 @@ export const TOOLS = [
       required: ['pr'],
       additionalProperties: false,
     },
+  },
+  {
+    name: 'open_folder',
+    description:
+      '呈折：把本机的文档拷进奏折仓、开分支、commit、查体例、push、建 PR、焊入「回奏对」标记并回读自核。\n' +
+      '**这是呈折的正路，别自己去 ~/Developer/review 里 git。** 你全程不碰那个仓——' +
+      '多个 session 同时动它会切走对方的分支、把暂存文件卷进别人的 commit（2026-07-27 实测）。\n' +
+      '· `docs` 传**本机绝对路径**，不传全文。**双语一对都要给**（`x.md` + `x.zh-CN.md`）——' +
+      '先判原文语言再定翻译方向\n' +
+      '· `assets` 是正文引用的图。忘了给 = 他读到断图（体例规则 4 防的就是这个）\n' +
+      '· 分支名默认取第一篇文档的 slug；分支已存在会**明着报错**，不覆盖（重复呈折是真事故）\n' +
+      '· 体例闸门卡在 commit 之后、push 之前：不合格时**远端一片干净**，什么都没推上去\n' +
+      '· 返回的 `desk` 是朱批台深链，**给他这个**；`prUrl` 是载体，别当主输出' +
+      '（给 GitHub 链接会读成「让你发朱批你却发了个 PR」，2026-07-27 踩过）\n' +
+      '· `warnings` 要照读：body 缺段、标记没埋上、分支基点落后都在里面，它们不阻断但都影响他读折',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: '奏折标题，也是 commit message' },
+        body: {
+          type: 'object',
+          description: '五段模板。缺项只警告不拦，但缺「待你拍板」他就不知道要拍什么',
+          properties: {
+            destination: { type: 'string', description: 'merge 后交付到哪' },
+            directLink: { type: 'string', description: '渲染版链接等' },
+            tldr: { type: 'string' },
+            decisions: { type: 'string', description: '待你拍板，编号列出' },
+            howto: { type: 'string', description: '怎么用；提醒他批完说「读批注」' },
+          },
+          additionalProperties: false,
+        },
+        docs: { type: 'array', items: { type: 'string' }, description: '本机绝对路径，双语一对都要给' },
+        assets: { type: 'array', items: { type: 'string' }, description: '本机绝对路径，正文引用的图' },
+        branch: { type: 'string', description: '覆盖用，默认取第一篇文档的 slug' },
+        sessionId: { type: 'string', description: '覆盖用；不给则自行探测，探不到就不埋（绝不编）' },
+      },
+      required: ['title', 'body', 'docs'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'reply_comment',
+    description:
+      '对某条 inline 批注回话。首行的 `**回话**` 前缀**由工具焊上**，你不用自己写。\n' +
+      '· `commentId` **必填**。省掉它在旧 SPEC 里是「发总批」，那条路已经关了——' +
+      'agent 发的总批与他的在 API 里完全同形（共用账号），会变成清不掉的假待办，实测多报 77%。' +
+      '折级小结**在聊天里说**；要留档的元数据写进 `docs/<slug>.md` 正文\n' +
+      '· 前缀不是装饰：你和他共用同一个 GitHub 账号，回话在 API 里完全同形，' +
+      '`isOurReply()` 靠它把这串从「判不了」挪进「确定已回」\n' +
+      '· **已钦此/已关的折会被拒**——回话落在没人看的已关页面上，命令全部成功而结果是零' +
+      '（2026-07-29 #23 就是这么绕了一大圈）。要补内容一律另开一折',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pr: { type: 'integer', minimum: 1, description: '折号' },
+        commentId: { type: 'integer', minimum: 1, description: 'inline 根批注 id，从 read_comments 来' },
+        body: { type: 'string', description: '处理方式：采纳 / 部分采纳+理由 / 不改+理由' },
+      },
+      required: ['pr', 'commentId', 'body'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'audit_folders',
+    description:
+      '存量巡检：扫所有 open 折，报「回奏对」标记、draft 状态、体例三类缺口。**纯只读，不改任何东西。**\n' +
+      '体例那部分调的是 lint_folder 同一个核（同一折两边判定必须一致）。\n' +
+      '为什么没有 --fix：补标记只能补成**当前**会话的 id，那不是呈这折的那个会话，是编一个；' +
+      'draft 转正 REST 不支持（只能 GraphQL，而那等于开放全部写操作）。' +
+      '两件事一个错一个不安全，所以只报不补——draft 那条会给你现成的 `gh pr ready` 命令。',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ] as const;
 
@@ -327,6 +400,63 @@ export async function handleTool(
     // （F12 只在 mark 里去了重，这条输出轴上重现了同一个多报）。
     const already = [...new Set(ids)].filter((i) => !added.includes(i) && !refreshed.includes(i));
     return { repo: ref.slug, pr, added, refreshed, alreadyHandled: already, stateFile: storePath() };
+  }
+  // ── 写入侧（Phase 3）──
+  if (name === 'open_folder') {
+    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'branch', 'sessionId']);
+    for (const k of ['title', 'branch', 'sessionId'] as const) {
+      if (args[k] !== undefined && typeof args[k] !== 'string') {
+        throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串，收到 ${JSON.stringify(args[k])}` });
+      }
+    }
+    for (const k of ['docs', 'assets'] as const) {
+      if (args[k] === undefined) continue;
+      if (!Array.isArray(args[k]) || (args[k] as unknown[]).some((x) => typeof x !== 'string')) {
+        throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串数组（本机绝对路径），收到 ${JSON.stringify(args[k])}` });
+      }
+    }
+    if (typeof args.body !== 'object' || args.body === null || Array.isArray(args.body)) {
+      throw new ZhupiFailure({ kind: 'badInput', what: 'body 得是对象：{ destination, directLink, tldr, decisions, howto }' });
+    }
+    // body 的键也挡未知：拼错一个键名的后果是**那一段静默消失**，
+    // 而缺段只警告不拦，于是折照样呈上去、他照样看不到「待你拍板」。
+    const bodyKeys = ['destination', 'directLink', 'tldr', 'decisions', 'howto'];
+    rejectUnknownKeys('open_folder 的 body', args.body as Record<string, unknown>, bodyKeys);
+    return openFolder(
+      {
+        title: args.title as string,
+        body: args.body as FolderBody,
+        docs: args.docs as string[],
+        ...(args.assets !== undefined ? { assets: args.assets as string[] } : {}),
+        ...(args.branch !== undefined ? { branch: args.branch as string } : {}),
+        ...(args.sessionId !== undefined ? { sessionId: args.sessionId as string } : {}),
+      },
+      ref,
+    );
+  }
+  if (name === 'reply_comment') {
+    rejectUnknownKeys('reply_comment', args, ['pr', 'commentId', 'body']);
+    const pr = parsePr(args.pr);
+    if (pr === undefined) throw new ZhupiFailure({ kind: 'badInput', what: 'reply_comment 必须给 pr' });
+    // **commentId 必填。** 省掉它在旧 SPEC §3.6 里是「发总批」——那条路 2026-07-30 关了
+    // （硬约定①，实测 13 条 needsReply 里 7 条是 agent 自己的话，多报 77%）。
+    // 报错要把替代动作说清楚，否则模型会以为是自己写错了参数然后换个写法重试。
+    if (args.commentId === undefined) {
+      throw new ZhupiFailure({
+        kind: 'badInput',
+        what: 'reply_comment 必须给 commentId（inline 根批注 id，从 read_comments 来）',
+        hint: '省掉它以前是「发总批」，那条路已经关了：折级小结在聊天里说，要留档的元数据写进 docs/<slug>.md 正文。',
+      });
+    }
+    const commentId = parsePr(args.commentId);
+    if (typeof args.body !== 'string' || !args.body.trim()) {
+      throw new ZhupiFailure({ kind: 'badInput', what: 'body 得是非空字符串' });
+    }
+    return replyComment({ pr, commentId: commentId!, body: args.body }, ref);
+  }
+  if (name === 'audit_folders') {
+    rejectUnknownKeys('audit_folders', args, []);
+    return auditFolders(ref);
   }
   throw new ZhupiFailure({ kind: 'badInput', what: `没有叫 ${name} 的工具` });
 }

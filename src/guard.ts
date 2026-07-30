@@ -81,7 +81,20 @@ const GH_WRITE_PATTERNS: Array<[RegExp, string]> = [
   [new RegExp(`--method['"\\s,\\]]*\\s*['"]?(${VERB})\\b`, 'i'), 'gh --method 写方法'],
   // gh api 带 -f/-F/--field/--raw-field 时**默认就是 POST**，不写 -X 也是写操作
   [/\bgh\b[\s\S]*?['"](-f|-F|--field|--raw-field)['"]/, 'gh api 带字段参数（隐式 POST）'],
-  [/\bgh\b\s+(pr|issue|release|repo)\s+(create|edit|merge|close|comment|delete)/, 'gh 子命令写操作'],
+  // **`gh` 前面必须紧挨着引号**，也就是它得是某个字符串字面量的开头。
+  //
+  // 2026-07-30（Phase 3）收窄。收窄前这条把**错误提示文案**也拦了：
+  // `补：gh pr edit ${pr} -R ${slug} --body-file <(...)` —— 那是告诉人怎么手工补救的话，
+  // 不是要执行的命令。SPEC §7 把「字符串里出现 ≠ 这条命令要执行」这个病根记了三遍
+  // （切段、剥 env 前缀、段首必须是 gh），这里是它在 TS 侧的第四次。
+  // 而写入侧的每条错误提示都要带一句恢复命令，不收窄的话这类误报会一直长。
+  //
+  // 收窄没有放走任何真调用：`run('gh pr create …')` 里 gh 就在引号后面。
+  // 数组拆分的写法（`run('gh', ['pr','create'])`）这条本来就匹配不到 —— 中间隔着
+  // `', ['`，`\s+` 过不去 —— 那个洞由下面新增的一条补，不靠这条。
+  [/['"`]gh\s+(pr|issue|release|repo)\s+(create|edit|merge|close|comment|delete)/, 'gh 子命令写操作'],
+  // 数组拆分的写法。`['gh', 'pr', 'create']` / `['gh','pr','edit']` 都要抓到。
+  [/['"`]gh['"`]\s*,[\s\S]{0,80}?['"`](pr|issue|release|repo)['"`]\s*,\s*['"`](create|edit|merge|close|comment|delete)['"`]/, 'gh 子命令写操作（数组写法）'],
 ];
 
 export interface Violation {

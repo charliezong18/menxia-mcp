@@ -9,7 +9,7 @@ export type ZhupiError =
   | { kind: 'repo'; repo: string }
   | { kind: 'notFound'; repo: string; pr: number }
   | { kind: 'network'; reason: string }
-  | { kind: 'badInput'; what: string }
+  | { kind: 'badInput'; what: string; hint?: string }
   | { kind: 'tooManyComments'; repo: string; pr: number }
   | { kind: 'tooManyFolders'; repo: string }
   | { kind: 'locked'; waitedMs: number; heldBy?: number }
@@ -67,7 +67,9 @@ function raw(e: ZhupiError): string {
       return `连不上 github.com${why ? `：${why}` : ''}。网络恢复后重试。`;
     }
     case 'badInput':
-      return `入参不对：${brief(e.what)}`;
+      // what 可能是多行的（体例 findings 逐条列出来），**不能用 brief 砍成一行** ——
+      // 砍掉之后模型只看得见第一条硬伤，修完再来又被第二条拦，来回好几轮。
+      return `入参不对：${e.what.includes('\n') ? e.what : brief(e.what)}${e.hint ? `\n${e.hint}` : ''}`;
     case 'tooManyComments':
       return `${e.repo} #${e.pr} 的批注超过一页（100 条），本阶段不做分页。` +
         '宁可明着失败也不静默少数——截断会把回话与根批注分到两页，回话变孤儿，凭空多出未回。';
