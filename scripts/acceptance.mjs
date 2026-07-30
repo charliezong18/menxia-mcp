@@ -64,10 +64,14 @@ const main = async () => {
     `实得 ${JSON.stringify(f17?.inline?.map((t) => t.replies.length))}`);
   check('全部已回', f17?.inline?.every((t) => t.answered === true));
   check('counts.needsReply = 0', f17?.counts?.needsReply === 0, `实得 ${f17?.counts?.needsReply}`);
-  check('已回的串进 unclear 而不是消失（他可能从网页在串里回过）',
-    f17?.counts?.unclear === 2, `实得 ${f17?.counts?.unclear}`);
-  check('attention 里那两条的预览取自最后一条回话',
-    f17?.attention?.filter((a) => a.why === 'reply-author-unclear').length === 2,
+  // 旧判据断言 unclear === 2 —— 那是把多报当成了期望行为。#17 那两条回话
+  // 在逐条核过的存量表（LEGACY_OUR_REPLIES）里，现在是**确定**已回。
+  check('#17 早就回完 → counts 干净', f17?.counts?.unclear === 0 && f17?.counts?.needsReply === 0,
+    JSON.stringify(f17?.counts));
+  check('干净是因为判定确定了，**不是因为数据被丢了**',
+    f17?.inline?.length === 2 && f17.inline.every((t) => t.replies?.[0]?.ours === true),
+    JSON.stringify(f17?.inline?.map((t) => [t.id, t.replies?.length, t.replies?.[0]?.ours])));
+  check('attention 空 —— 没有需要人看一眼的东西了', (f17?.attention?.length ?? -1) === 0,
     JSON.stringify(f17?.attention?.map((a) => a.why)));
   check('行号回退到 original_line（非 null）', f17?.inline?.every((t) => typeof t.line === 'number'),
     `实得 ${JSON.stringify(f17?.inline?.map((t) => t.line))}`);
@@ -161,6 +165,25 @@ const main = async () => {
       f.ok && d?.ok && typeof f.counts === 'object' && JSON.stringify(d.counts) === JSON.stringify(f.counts),
       `list=${JSON.stringify(f.counts)} read=${JSON.stringify(d?.counts)}`);
   }
+
+  console.log('\n── 立项理由：省 context（第三轮评审实测退化过，钉住）──');
+  const oneFolder = JSON.stringify(await call(client, 'read_comments', { pr: 22 })).length;
+  const allOpen = JSON.stringify(await call(client, 'read_comments', {})).length;
+  const triage = JSON.stringify(await call(client, 'list_folders', {})).length;
+  console.log(`  单折 #22 ${oneFolder} B · 全部 open ${allOpen} B · 只分诊 ${triage} B`);
+  check('单折体积没膨胀（截断总批正文之后）', oneFolder < 9000, `${oneFolder} B`);
+  check('只分诊比读全部小一个量级 —— 「哪些折在等我」应该很便宜', triage * 3 < allOpen, `${triage} vs ${allOpen}`);
+  const long = (await call(client, 'read_comments', {})).folders
+    .flatMap((f) => f.conversation ?? []).filter((c) => c.bodyTruncated);
+  check('超长总批被截断并标 bodyTruncated + bodyLength',
+    long.every((c) => c.body.length < 700 && typeof c.bodyLength === 'number'),
+    JSON.stringify(long.map((c) => [c.id, c.body.length, c.bodyLength])));
+
+  console.log('\n── 反向判据：不该显示的东西别显示 ──');
+  // 上一版 26 条判据全是「有没有显示出来」，于是 68% 噪音全绿交付（第三轮评审）。
+  const r22 = (await call(client, 'read_comments', { pr: 22 })).folders[0];
+  check('#22 那 4 条早回完的串不该再挂在 unclear（约定生效前发的回话没前缀）',
+    r22.counts.unclear === 0, `unclear=${r22.counts.unclear}：${JSON.stringify(r22.attention?.map((a) => a.preview.slice(0, 24)))}`);
 
   console.log('\n── R6 · 错误面向模型可执行 ──');
   const notFound = await client.callTool({ name: 'read_comments', arguments: { pr: 999999 } });

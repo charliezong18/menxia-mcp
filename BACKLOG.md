@@ -65,3 +65,14 @@ Things that are thought through but not scheduled.
 **How**: out of scope for an MCP server — a server only speaks when spoken to. This belongs in a GitHub Action or the existing ntfy setup. Recorded here because it is the natural next thought after `list_folders` and should be pointed elsewhere rather than re-litigated.
 
 **Undecided**: whether zhupi's own BACKLOG F10 (push one line when a document arrives) already covers the mirror image of this, in which case both live there.
+
+## Paginate the merged listing (noted 2026-07-30; will bite around mid-August 2026)
+
+`list_folders({state:'merged'})` fetches `pulls?state=closed&per_page=100`, and `get()`
+fails outright on `rel="next"`. Review round 3 did the arithmetic: the repo grew from #1
+(07-26) to #31 (07-30), roughly 7 folders/day, with 15 closed today — **it crosses 100 in
+about two weeks**, at which point the tool stops working entirely.
+
+The "fail loudly rather than silently return fewer" decision stands, but by then the error
+text must at least offer a usable detour (list open only, or `read_comments(pr)` directly).
+Not doing it now because the open side is much further away (16).

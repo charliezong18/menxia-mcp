@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -237,21 +238,53 @@ describe('第二轮评审：这些修复原本没有测试护着', () => {
     expect(readdirSync(dir).filter((f) => f.endsWith('.lock'))).toEqual([]);
   });
 
-  it('陈旧锁能被接管 —— 否则持锁进程被杀一次就永久卡死', () => {
-    mkdirSync(`${file}.lock`, { recursive: true });
-    utimesSync(`${file}.lock`, new Date(Date.now() - 60_000), new Date(Date.now() - 60_000));
-    expect(commit(9, [E(91)], file).added).toEqual([91]);
-  });
-
-  it('别人正持锁 → 等到超时就明着报错，不静默跳过写入', () => {
-    process.env.ZHUPI_LOCK_TIMEOUT_MS = '120';
+  it('陈旧锁能被接管 —— **用真实新锁**跑够超时，不许拨 mtime 骗自己', () => {
+    // 上一版把锁的 mtime 往前拨 60 秒，于是「陈旧阈值 10s > 等锁上限 5s、这条路永远走不到」
+    // 这个真 bug 被测试放过了（第三轮评审实测：持锁进程被杀一次就永久写不进去）。
+    // 现在陈旧阈值恒为上限的 60%，所以真实新锁等到 60% 时就该被接管。
+    process.env.ZHUPI_LOCK_TIMEOUT_MS = '400';
     try {
-      mkdirSync(`${file}.lock`, { recursive: true });   // 新鲜锁
-      expect(() => commit(9, [E(91)], file)).toThrow(/被别的进程占着/);
-      expect(load(file).store).toEqual({});            // 没有偷偷写进去
+      mkdirSync(`${file}.lock`, { recursive: true });   // 真·新锁，mtime = now
+      expect(commit(9, [E(91)], file).added).toEqual([91]);
+      expect(handledIds(load(file).store, 9, [E(91)]).size).toBe(1);
     } finally {
       delete process.env.ZHUPI_LOCK_TIMEOUT_MS;
       rmSync(`${file}.lock`, { recursive: true, force: true });
+    }
+  });
+
+  it('陈旧阈值必须小于等锁上限 —— 否则接管是死代码', () => {
+    // 不测常量本身（会被改回去也不报），测**可观察后果**：无主锁最终一定被接管。
+    process.env.ZHUPI_LOCK_TIMEOUT_MS = '400';
+    try {
+      mkdirSync(`${file}.lock`, { recursive: true });
+      expect(() => commit(9, [E(91)], file)).not.toThrow();
+    } finally {
+      delete process.env.ZHUPI_LOCK_TIMEOUT_MS;
+      rmSync(`${file}.lock`, { recursive: true, force: true });
+    }
+  });
+
+  it('锁被一个**活着的**进程持有时，等到超时明着报错，不静默跳过写入', () => {
+    // 必须真开子进程：commit 的忙等是 Atomics.wait，会把事件循环整个阻住，
+    // 同进程里的 setInterval 一次都不会跑 —— 那样测出来的是「锁被接管」，
+    // 恰好把要测的东西测反了。
+    const lock = `${file}.lock`;
+    const child = spawn(process.execPath, ['-e',
+      `const {mkdirSync,utimesSync}=require('node:fs');mkdirSync(${JSON.stringify(lock)},{recursive:true});` +
+      `setInterval(()=>{try{utimesSync(${JSON.stringify(lock)},new Date(),new Date())}catch{}},15);`,
+    ], { stdio: 'ignore' });
+    process.env.ZHUPI_LOCK_TIMEOUT_MS = '400';
+    try {
+      const until = Date.now() + 3000;
+      while (!existsSync(lock) && Date.now() < until) { /* 等子进程建好锁 */ }
+      expect(existsSync(lock)).toBe(true);
+      expect(() => commit(9, [E(91)], file)).toThrow(/被别的进程占着/);
+      expect(load(file).store).toEqual({});            // 没有偷偷写进去
+    } finally {
+      child.kill('SIGKILL');
+      delete process.env.ZHUPI_LOCK_TIMEOUT_MS;
+      rmSync(lock, { recursive: true, force: true });
     }
   });
 });

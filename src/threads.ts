@@ -111,6 +111,10 @@ export interface ConversationItem {
   answered: ConversationVerdict;
   /** 服务端最后修改时间，`mark_handled` 要拿它记水位 */
   updatedAt: string;
+  /** true = body 被截断了（超长总批）。要全文走 `gh api` */
+  bodyTruncated?: boolean;
+  /** 原始长度，配 bodyTruncated 一起给 */
+  bodyLength?: number;
 }
 
 export interface Counts {
@@ -172,7 +176,12 @@ export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
     .filter((r) => DESK_FALLBACK_MARK.test(r.body ?? ''))
     .map((r) => ({
       id: r.id,
-      body: (r.body ?? '').replace(DESK_FALLBACK_MARK, '（朱批锚不到行，zhupi 并入总批）'),
+      // 整条模板都剥掉，不只是开头那截。第三轮评审实测残留的
+      // 「（或写于旧版本），并入总批：」占 preview 前 80 字的 41%，
+      // 而 preview 是 seed 决策唯一的依据面。
+      body: (r.body ?? '')
+        .replace(/^以下朱批锚定不到可批注行（或写于旧版本）[，,]\s*并入总批[：:]\s*/, '（朱批锚不到行，zhupi 并入总批）\n\n')
+        .replace(DESK_FALLBACK_MARK, '（朱批锚不到行，zhupi 并入总批）'),
       created_at: r.submitted_at ?? '',
       user: null,
     }));
@@ -191,8 +200,38 @@ export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
  */
 export const OUR_REPLY_MARK = /^\s*\*\*回话\*\*/;
 
-/** 确定是我方回的：盖了 `**回话**` 前缀。没盖 ≠ 他的，只是判不了。 */
-export const isOurReply = (body: string): boolean => OUR_REPLY_MARK.test(body ?? '');
+/**
+ * 前缀约定生效前就存在的回话，**逐条核过是 agent 发的**。
+ *
+ * 为什么要有这张表：这 12 条一条没盖前缀，不认领的话 #17 / #22 这些
+ * **早就回完的折**会永久卡在 `unclear` —— 第三轮评审实测 19 条 attention 里
+ * 13 条是 agent 自己已交付的回话（68% 噪音）。
+ *
+ * 为什么是写死的 id、不是「早于某个日期就算我方」：
+ * 那条日期规则的**推广范围超出了被核实的范围** —— 他若在那之前从 GitHub 网页
+ * 直接在串里回过话，会被静默认成我方 → 漏报，正是本项目最贵的失效。
+ * 前一轮评审专门写了一条测试防它，我的日期版把那条测试打破了，这就是信号。
+ *
+ * 这 12 条怎么核的（2026-07-30）：① zhupi 源码里**没有回复 inline 串的 UI**
+ * （写口只有 submitReview / createIssueComment / mergePR / markReady）；
+ * ② 12 条回话与 12 条空 body review 一一对应，全部出自 agent 的 `/replies` 调用；
+ * ③ 时间戳成组聚在 1–2 秒内，是脚本循环的指纹，不是人手打的。
+ *
+ * 表里没有的一律按前缀判。id 将来失效的后果是那条回到 `unclear`（多报，良性）。
+ */
+export const LEGACY_OUR_REPLIES: ReadonlySet<number> = new Set([
+  3663477742, 3663477853, 3663477960, 3663479857, 3663479949, 3663480028,
+  3669695088, 3669696762, 3676795050, 3676795419, 3676795643, 3676795842,
+]);
+
+/**
+ * 确定是我方回的。两条判据：
+ * ① 盖了 `**回话**` 前缀（约定生效后的正路）
+ * ② 在上面那张逐条核过的存量表里
+ * 都不满足 = **判不了**，不是「他的」。
+ */
+export const isOurReply = (body: string, id?: number): boolean =>
+  OUR_REPLY_MARK.test(body ?? '') || (id != null && LEGACY_OUR_REPLIES.has(id));
 
 /** 根批注：in_reply_to_id 缺失或为 null。**不能写 === null**，实测该 key 会整个缺失。 */
 export const isRoot = (c: RawInlineComment): boolean => c.in_reply_to_id == null;
@@ -267,7 +306,7 @@ export function buildInlineThreads(
         body: x.body,
         createdAt: x.created_at,
         fromDesk: isFromDesk(x, bodies),
-        ours: isOurReply(x.body),
+        ours: isOurReply(x.body, x.id),
       }));
     const fromDesk = isFromDesk(r, bodies);
     // 「已回」= 串里**最后一句是我方说的**。
@@ -275,8 +314,7 @@ export function buildInlineThreads(
     // 他在串里再反驳一句，整串就显示成已回，而那恰恰是最要紧的一条）。
     // 只看「有没有我方 reply」同样会：他反驳在后，串仍然算已回。
     const last = replies[replies.length - 1];
-    // 盖了 `**回话**` 的确定是我方；否则只能退回「不是朱批台来的就当我方」这个弱判据。
-    const lastIsOurs = last != null && (isOurReply(last.body) || !last.fromDesk);
+    const lastIsOurs = last != null && (last.ours === true || !last.fromDesk);
     return {
       id: r.id,
       path: r.path,

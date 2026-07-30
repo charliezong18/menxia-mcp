@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
+  LEGACY_OUR_REPLIES,
   conversationEntriesOf,
   isOurReply,
   buildInlineThreads,
@@ -335,11 +336,15 @@ describe('第三轮评审：他不走朱批台的两条路（明早最可能踩�
     expect(a[0]!.preview).toContain('不对，我说的是第二段');
   });
 
-  it('正常已回的串仍然不进 needsReply（只进 unclear，代价可控）', () => {
+  it('#17 真数据：早就回完的折应该**干净**，不是永久挂在 unclear', () => {
+    // 上一版这里断言 unclear === 2 —— 那是把旧的多报当成了期望行为。
+    // #17 那两条回话在逐条核过的存量表里，所以现在是确定已回。
     const t = buildInlineThreads(pr17Comments, pr17Reviews);
-    const c = countsOf(t, []);
-    expect(c.needsReply).toBe(0);
-    expect(c.unclear).toBe(2);
+    expect(countsOf(t, [])).toEqual({ needsReply: 0, unclear: 0 });
+    expect(attentionOf(t, [])).toEqual([]);
+    // 但**批注本身一条都不能少** —— 干净是因为判定确定了，不是因为数据被丢了
+    expect(t).toHaveLength(2);
+    expect(t.every((x) => x.replies.length === 1 && x.replies[0]!.ours === true)).toBe(true);
   });
 
   it('降级 review 与普通总批按时间混排', () => {
@@ -410,23 +415,25 @@ describe('总批的 answered 改用本地记录（review#29）', () => {
 describe('`**回话**` 前缀：把「判不了」变成「确定」（第一轮评审）', () => {
   // 我在 skill 里写过「不盖前缀 list_folders 就分不出」——而当时**没有任何代码读它**。
   // 那句因果是编的。这里是它的兑现处。
+  // 日期必须晚于 REPLY_MARK_SINCE，否则走回溯判据（那条另有一组测试）
   const root = (id: number): RawInlineComment => ({
-    id, path: 'docs/a.md', body: '这段太绕', created_at: '2026-07-29T10:00:00Z',
+    id, path: 'docs/a.md', body: '这段太绕', created_at: '2026-08-01T10:00:00Z',
     line: 3, diff_hunk: '@@ -1,2 +1,2 @@\n 这段太绕', pull_request_review_id: 900,
   });
-  const reply = (id: number, body: string): RawInlineComment => ({
-    id, path: 'docs/a.md', body, created_at: '2026-07-29T11:00:00Z',
+  const reply = (id: number, body: string, at = '2026-08-01T11:00:00Z'): RawInlineComment => ({
+    id, path: 'docs/a.md', body, created_at: at,
     in_reply_to_id: 1, diff_hunk: '', pull_request_review_id: 901,
   });
   // 900 是朱批台发的（review body 带 marker）；901 是 /replies 自动建的空 body review——
   // 他从 GitHub 网页在串里回话产生的也是空 body，两者完全同形。
   const reviews: RawReview[] = [
-    { id: 900, body: '御笔朱批 · 1 条', submitted_at: '2026-07-29T10:00:00Z' },
-    { id: 901, body: '', submitted_at: '2026-07-29T11:00:00Z' },
+    { id: 900, body: '御笔朱批 · 1 条', submitted_at: '2026-08-01T10:00:00Z' },
+    { id: 901, body: '', submitted_at: '2026-08-01T11:00:00Z' },
   ];
 
   it('isOurReply 只认首行的加粗前缀', () => {
     expect(isOurReply('**回话**\n\n改了')).toBe(true);
+    expect(isOurReply('**回话** 改了')).toBe(true);   // 同行写法（朱批台上不重复）
     expect(isOurReply('  **回话** 改了')).toBe(true);
     expect(isOurReply('改了。**回话**')).toBe(false);
     expect(isOurReply('回话：改了')).toBe(false);
@@ -483,5 +490,46 @@ describe('conversationEntriesOf：水位必须取 updated_at（第二轮评审�
         { id: 1, body: 'x', created_at: '2026-07-29T10:00:00Z', updated_at: at },
       ])).toEqual([{ id: 1, updatedAt: '2026-07-29T10:00:00Z' }]);
     }
+  });
+});
+
+describe('存量回话靠逐条核过的 id 表认领（第三轮评审）', () => {
+  // 不认领的话 #17/#22 这些早就回完的折永久卡在 unclear（19 条 attention 里 13 条噪音）。
+  // 但**不能用「早于某日期就算我方」** —— 那条规则的推广范围超出了被核实的范围，
+  // 他若在那之前从网页在串里回过话就会被静默认成我方（漏报）。
+  const LEGACY = [...LEGACY_OUR_REPLIES][0]!;
+
+  it('表里的 id → 认成我方', () => {
+    expect(isOurReply('采纳，已改', LEGACY)).toBe(true);
+  });
+
+  it('表外的 id 没盖前缀 → 仍然判不了。**认领不能推广**', () => {
+    expect(isOurReply('采纳，已改', 9999999999)).toBe(false);
+    expect(isOurReply('采纳，已改')).toBe(false);
+  });
+
+  it('表是有限集，不是日期区间 —— 同一天的别的 id 不沾光', () => {
+    expect(isOurReply('采纳，已改', LEGACY + 1)).toBe(false);
+  });
+
+  it('盖了前缀的照旧认，与表无关', () => {
+    expect(isOurReply('**回话** 已改', 9999999999)).toBe(true);
+  });
+
+  it('串级别：存量回话让 unclear 归零，他后来又追一句就回到 unclear', () => {
+    const at = '2026-07-28T07:00:00Z';
+    const rt: RawInlineComment = {
+      id: 1, path: 'a.md', body: '这段太绕', created_at: at,
+      line: 3, diff_hunk: '@@ -1,2 +1,2 @@\n 这段太绕', pull_request_review_id: 900,
+    };
+    const old: RawInlineComment = { id: LEGACY, path: 'a.md', body: '采纳，已改', created_at: at, in_reply_to_id: 1, diff_hunk: '', pull_request_review_id: 901 };
+    const his: RawInlineComment = { id: 777, path: 'a.md', body: '不对，我说的是第二段', created_at: '2026-08-01T10:00:00Z', in_reply_to_id: 1, diff_hunk: '', pull_request_review_id: 902 };
+    const revs: RawReview[] = [
+      { id: 900, body: '御笔朱批 · 1 条', submitted_at: at },
+      { id: 901, body: '', submitted_at: at },
+      { id: 902, body: '', submitted_at: '2026-08-01T10:00:00Z' },
+    ];
+    expect(countsOf(buildInlineThreads([rt, old], revs), [])).toEqual({ needsReply: 0, unclear: 0 });
+    expect(countsOf(buildInlineThreads([rt, old, his], revs), []).unclear).toBe(1);
   });
 });
