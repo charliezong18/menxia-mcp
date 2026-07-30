@@ -18,7 +18,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsc --noEmit && vitest run && node scripts/print-milestones.mjs; node scripts/print-parity.mjs",
+    "test": "sh -c 'tsc && vitest run && node scripts/print-milestones.mjs; rc=$?; node scripts/print-parity.mjs; exit $rc'",
     "test:watch": "vitest",
     "acceptance": "npm run build && node scripts/acceptance.mjs && node scripts/lint-differential.mjs",
     "diagrams": "./render-diagrams.sh",

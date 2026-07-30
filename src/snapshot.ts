@@ -47,16 +47,36 @@ function raw(cwd: string, args: string[]): string {
   return execFileSync('git', ['-c', 'core.quotePath=false', ...args], {
     cwd,
     encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
+    // 可覆盖是为了能**真**测到 ENOBUFS 那条路径。
+    // 不开这个接缝的话那条测试只能断言「异常类存在」——那是恒绿，
+    // 而「测试恒绿」正是这个项目栽过五次的病。
+    maxBuffer: Number(process.env.ZHUPI_GIT_MAXBUFFER) || 64 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
-/** 跑 git 拿**标量**（sha / 计数 / 路径清单），去掉尾部换行。失败返回 null。 */
+/** git 输出超过 maxBuffer。**不能当成「文件不存在」** —— 那是工具故障不是体例结论。 */
+export class GitOutputTooLarge extends Error {}
+
+/**
+ * 区分「这个 ref 下没有这个东西」和「git 跑不起来」。
+ *
+ * 上一版一律 `catch { return null }`，于是 ENOBUFS（输出超限）被静默降级成
+ * 「文件不存在」—— 双向都错：谎报缺译本 + 让规则 4 整条不跑。
+ * 把 maxBuffer 从 1 MiB 抬到 64 MiB 只是把门槛挪远了，病灶还在（第二轮评审指出）。
+ */
+function classify(e: unknown): 'missing' | never {
+  const code = (e as NodeJS.ErrnoException)?.code;
+  if (code === 'ENOBUFS') throw new GitOutputTooLarge('git 输出超过 64 MB —— 这是工具限制，不是「文件不存在」');
+  return 'missing';
+}
+
+/** 跑 git 拿**标量**（sha / 计数 / 路径清单），去掉尾部换行。取不到返回 null。 */
 function tryGit(cwd: string, args: string[]): string | null {
   try {
     return raw(cwd, args).trimEnd();
-  } catch {
+  } catch (e) {
+    classify(e);
     return null;
   }
 }
@@ -71,7 +91,8 @@ function tryGit(cwd: string, args: string[]): string | null {
 function tryFile(cwd: string, args: string[]): string | null {
   try {
     return raw(cwd, args);
-  } catch {
+  } catch (e) {
+    classify(e);
     return null;
   }
 }
