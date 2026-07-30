@@ -14,6 +14,7 @@ function snap(over: Partial<Snapshot> = {}): Snapshot {
     changed: over.changed ?? [...files.keys()],
     assets: over.assets ?? new Set(),
     payload: over.payload ?? [],
+    monolingual: over.monolingual ?? [],
     onMain: over.onMain ?? new Set(),
     base: over.base ?? { behind: 0, fetchFailed: false },
     ...(over.body !== undefined ? { body: over.body } : {}),
@@ -49,17 +50,35 @@ describe('规则 1 · 双语对齐全（按 slug 双向）', () => {
   });
 });
 
-describe('规则 2 · 互链头逐字符', () => {
+describe('规则 2 · 互链头「点得到对面」（第三轮评审后按 zhupi 真实行为改）', () => {
   it('对 → 过', () => expect(rules(snap())).not.toContain(2));
 
-  it('英文版首行错 → 硬伤', () => {
-    const files = new Map([['docs/a.md', '**English** · [中文](a.zh-CN.md) 多了字'], ['docs/a.zh-CN.md', ZH('a')]]);
-    expect(lint(snap({ files })).some((f) => f.rule === 2 && f.message.includes('英文版'))).toBe(true);
+  it('**点不到对面 → 硬伤**（GitHub 原生页面上互链断了）', () => {
+    const files = new Map([['docs/a.md', '**English** 没有链接'], ['docs/a.zh-CN.md', ZH('a')]]);
+    const f = lint(snap({ files })).filter((x) => x.rule === 2);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.severity).toBe('hard');
   });
 
-  it('中文版首行错 → 硬伤', () => {
-    const files = new Map([['docs/a.md', EN('a')], ['docs/a.zh-CN.md', '[English](a.md) · 中文']]);
-    expect(lint(snap({ files })).some((f) => f.rule === 2 && f.message.includes('中文版'))).toBe(true);
+  it('链接指错文件 → 硬伤', () => {
+    const files = new Map([['docs/a.md', '**English** · [中文](b.zh-CN.md)'], ['docs/a.zh-CN.md', ZH('a')]]);
+    expect(lint(snap({ files })).some((x) => x.rule === 2 && x.severity === 'hard')).toBe(true);
+  });
+
+  it('**点得到但写法不同 → 只警告**（#12 就是被这种误报拦住的）', () => {
+    const files = new Map([
+      ['docs/a.md', '**English** | [中文](./a.zh-CN.md)\n\nEnglish prose.'],
+      ['docs/a.zh-CN.md', ZH('a')],
+    ]);
+    const f = lint(snap({ files })).filter((x) => x.rule === 2);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.severity).toBe('warn');
+    expect(hasHard(lint(snap({ files })))).toBe(false);
+  });
+
+  it('报错要给**实际值** —— `·`(U+00B7) 和 `|` 在等宽字体里几乎看不出差别', () => {
+    const files = new Map([['docs/a.md', '**English** | [中文](a.zh-CN.md)'], ['docs/a.zh-CN.md', ZH('a')]]);
+    expect(lint(snap({ files })).find((x) => x.rule === 2)!.message).toMatch(/实为：.*\|/);
   });
 
   it('slug 带目录时用 basename 拼互链头', () => {

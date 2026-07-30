@@ -292,3 +292,38 @@ At the end of each phase, do a real-machine run (actually open a folder / actual
 | Cross-harness has no consumer today | Known and accepted (§1). The project stands on the other three benefits; if it ever comes down to this one alone, re-evaluate |
 | ppid detection fails in future Happy versions | Do not embed if not detected (existing strategy); failure manifests as the button disappearing, it will not point to the wrong thing |
 | Public repo leaks private info | This repo contains no document content; the `charliezong18/review` repo name is configurable, with the default value written in README instead of hardcoded |
+
+
+### 5.4 Registry of deliberate improvements (completed 2026-07-30, after Phase 2's three review rounds)
+
+§5.2 says a deliberate improvement must be written down with its reason. Three were missing
+from the registry, all in the **dangerous direction** — the old one blocks, the new one lets
+through (caught in review round 2):
+
+| Difference | Old | New | Why |
+|---|---|---|---|
+| BOM on the first line | blocks | passes | JS `trim()` eats U+FEFF per spec |
+| CRLF on the first line | blocks | passes | same, `trim()` eats `\r` |
+| Trailing spaces on the first line | blocks | passes | same |
+
+All three are **moot now** — round 3 read zhupi's source and found the cross-link rule's stated
+justification to be false (`lang.js` pairs by filename and never reads the first line), so the
+criterion is now "the link target resolves to the sibling file" and spelling differences warn.
+
+**Three rules changed in round 3, all misaligned with zhupi's actual behaviour**:
+
+1. **Rule 2 goes from character-exact to "the link reaches the sibling", and the spelling half
+   drops from hard to warn.** It was measurably blocking #12, which renders perfectly in zhupi.
+2. **Rule 4 resolves image references against the document's own directory**, matching
+   `zhupi/src/render.js:26`. The previous version always joined against `docs/` — for docs in
+   subdirectories, lint said "present" while zhupi showed a broken image. An under-report.
+3. **Rule 1 gains a `docs/.monolingual` registry exemption.** Once the old script's false-pass
+   bug was fixed, rule 1 took effect for the first time and flagged 22 hard errors on #31 (a
+   22-chapter history of Chinese officialdom) — which nobody is going to translate into English.
+
+**Rule 5, measured** across all 27 bilingual pairs: false-positive rate **0/27**, but its
+discriminating power is near zero too — the median document must lose 40% of its translation
+before it warns, six would not warn at 95% missing, and structurally it cannot see monolingual
+documents at all (25 of 29 monolingual slugs are Chinese sitting in the English slot). The
+threshold needs no change (zero false positives, free to run as a warning), but **do not
+document it as insurance for translation direction** — today it only catches "not translated at all".

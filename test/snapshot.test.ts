@@ -55,8 +55,10 @@ describe('happy path（真 git 仓）', () => {
     expect(s.files.get('docs/a.md')).toBe(EN);
   });
 
-  it('assets 路径相对 docs/（老脚本用 `docs/$ref` 拼）', () => {
-    expect(collect({ worktree: wt, skipFetch: true }).assets).toEqual(new Set(['assets/real.png']));
+  it('采整个 docs/ 的文件清单（相对 docs/）—— 子目录文档的图要查得到', () => {
+    const a = collect({ worktree: wt, skipFetch: true }).assets;
+    expect(a.has('assets/real.png')).toBe(true);
+    expect(a.has('a.md')).toBe(true);   // 只扫 docs/assets/ 的话这条会假
   });
 
   it('读到 docs/.payload', () => {
