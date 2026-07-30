@@ -85,34 +85,33 @@ export interface InlineThread {
   answered: boolean;
 }
 
-export type ConversationVerdict = 'inferred' | 'unknown';
+/**
+ * `handled` = 我方记过「已处理」（本地记录，见 processed.ts）
+ * `pending` = 没记过 → 要处理
+ *
+ * v3 之前这里是 `inferred | unknown` 的位置推断（`i < len-1 → inferred`）。
+ * 那个推断成立的前提是「会话区是双方 channel」——agent 不再发折级小结之后
+ * 它变成单方收件箱，「后面还有话」只意味着 Charlie 又说了一句，
+ * 于是**他连发两条总批，前一条会被静默判成已答**（漏报）。所以换成本地记录，不再猜。
+ */
+export type ConversationVerdict = 'handled' | 'pending';
 
 export interface ConversationItem {
   id: number;
   body: string;
   author: string | null;
   createdAt: string;
-  /** true = 确定是他发的（zhupi 降级并入总批的朱批）。普通总批判不了，为 false。 */
+  /** true = 确定是他发的（zhupi 降级并入总批的朱批） */
   fromDesk?: boolean;
-  /**
-   * 会话区没有任何判别信号（createIssueComment 裸发 body），所以：
-   *   inferred = 它后面还有别的总批，推测有人接过话了
-   *   unknown  = 它是最后一条，无法判定是他的新意见还是我的回话
-   * 永不返回 true/false —— 要等 Phase 3 埋标记才谈得上确定。
-   */
+  /** handled = 我方记过已处理；pending = 要处理。不再是推断。 */
   answered: ConversationVerdict;
 }
 
 export interface Counts {
-  /** 确定要我处理：他发的、一条回话都没有的 inline 批注 */
+  /** 确定要我处理：他发的、没有我方回话的 inline 批注 + 没记过已处理的总批 */
   needsReply: number;
-  /** 判不了：账号共用导致无法确定是他的新话还是我方回话。**必须配合 attention 的预览看** */
+  /** 判不了：inline 串里最后一句的作者判不出（他可能从 GitHub 网页回的） */
   unclear: number;
-  /**
-   * 后面还有别的总批。**不代表已回**——他连发两条时第一条也会落这里。
-   * v1 管这叫 inferred（「推测已回」），第二轮评审判定那是在撒谎，故改名。
-   */
-  hasFollowUp: number;
 }
 
 /**
@@ -285,37 +284,36 @@ export function buildInlineThreads(
 export function classifyConversation(
   items: RawIssueComment[],
   deskNotes: RawIssueComment[] = [],
+  handled: Set<number> = new Set(),
 ): ConversationItem[] {
   const deskIds = new Set(deskNotes.map((d) => d.id));
-  const sorted = [...items, ...deskNotes].sort((a, b) => a.created_at.localeCompare(b.created_at));
-  return sorted.map((c, i) => ({
-    id: c.id,
-    body: c.body,
-    author: c.user?.login ?? null,
-    createdAt: c.created_at,
-    fromDesk: deskIds.has(c.id),
-    // 降级来的确定是他发的：后面有别的总批才算可能被接过话，否则就是确定要回。
-    answered: i < sorted.length - 1 ? 'inferred' : 'unknown',
-  }));
+  return [...items, ...deskNotes]
+    .sort((a, b) => a.created_at.localeCompare(b.created_at))
+    .map((c) => ({
+      id: c.id,
+      body: c.body,
+      author: c.user?.login ?? null,
+      createdAt: c.created_at,
+      fromDesk: deskIds.has(c.id),
+      // **不再看位置。** 记过就是 handled，没记过就是 pending。
+      answered: handled.has(c.id) ? 'handled' : 'pending',
+    }));
 }
 
 // —— 计数 ——
 
 export function countsOf(inline: InlineThread[], conversation: ConversationItem[]): Counts {
   return {
+    // 总批现在是确定的：没记过已处理就是要处理，跟谁发的无关。
     needsReply:
       inline.filter((t) => t.fromDesk && t.replies.length === 0).length +
-      // 降级并入总批的朱批**确定是他发的**，后面没人接话就是确定要回。
-      conversation.filter((c) => c.fromDesk && c.answered === 'unknown').length,
-    // 判不了的：① 最后一条普通总批；② 非朱批台来源的根批注（他从 GitHub 网页发的）；
-    // ③ **朱批根批注、有回话、但最后一句不是从朱批台来的**——
-    //    他从网页在串里回一句，与我方回话完全同形。第三轮评审指出这条最坏：
-    //    他一开口，串反而变成「已回」，工具比他不说话时更安静。
+      conversation.filter((c) => c.answered === 'pending').length,
+    // 只剩 inline 那一类判不了：① 非朱批台来源的根批注（他从 GitHub 网页发的）；
+    // ② 朱批根批注有回话、但最后一句的作者判不出。
+    //    第三轮评审指出后者最坏：他一开口，串反而变成「已回」，工具比他不说话时更安静。
     unclear:
-      conversation.filter((c) => !c.fromDesk && c.answered === 'unknown').length +
       inline.filter((t) => !t.fromDesk).length +
       inline.filter((t) => t.fromDesk && t.replies.length > 0).length,
-    hasFollowUp: conversation.filter((c) => c.answered === 'inferred').length,
   };
 }
 
@@ -336,14 +334,8 @@ export function attentionOf(inline: InlineThread[], conversation: ConversationIt
     }
   }
   for (const c of conversation) {
-    if (c.answered === 'unknown') {
-      out.push({
-        kind: 'conversation',
-        id: c.id,
-        preview: preview(c.body),
-        createdAt: c.createdAt,
-        why: c.fromDesk ? 'no-reply' : 'last-word-unclear',
-      });
+    if (c.answered === 'pending') {
+      out.push({ kind: 'conversation', id: c.id, preview: preview(c.body), createdAt: c.createdAt, why: 'no-reply' });
     }
   }
   return out.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
