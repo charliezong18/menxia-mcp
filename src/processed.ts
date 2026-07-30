@@ -117,9 +117,15 @@ export function save(store: ProcessedStore, path = storePath()): void {
 // 用 mkdir 当锁：POSIX 上 mkdir 是原子的，已存在就 EEXIST。
 // 必须能接管陈旧锁，否则持锁进程被杀一次就永久卡死。
 
-const LOCK_STALE_MS = 10_000;
 /** 等锁上限。测试里调小，免得一条断言就拖 5 秒。 */
 const lockTimeoutMs = (): number => Number(process.env.ZHUPI_LOCK_TIMEOUT_MS) || 5_000;
+/**
+ * 多久算陈旧锁。**必须小于等锁上限**，否则接管这条路永远走不到。
+ * 上一版写死 10s > 5s，第三轮评审实测：持锁进程被杀一次，之后每次调用都 5s 后失败，
+ * 状态文件永久写不进去 —— 正是这段代码声称防住的事。而护着它的测试把锁的 mtime
+ * 往前拨了 60 秒，所以是绿的（同一个「测试恒绿」毛病，这是第三次）。
+ */
+const lockStaleMs = (): number => Math.floor(lockTimeoutMs() * 0.6);
 
 /** 同步睡眠。写操作稀少且极小，忙等这几十毫秒比引入异步传染更简单。 */
 function sleepSync(ms: number): void {
@@ -133,11 +139,12 @@ function withLock<T>(path: string, fn: () => T): T {
   for (;;) {
     try {
       mkdirSync(lock);
+      writeFileSync(join(lock, 'pid'), String(process.pid), 'utf8');
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       try {
-        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+        if (Date.now() - statSync(lock).mtimeMs > lockStaleMs()) {
           rmSync(lock, { recursive: true, force: true });
           continue;
         }
@@ -153,7 +160,15 @@ function withLock<T>(path: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    // 只删**自己的**锁。若本进程被判成陈旧、锁已被别人接管，无条件删会把接管者的锁删掉，
+    // 第三个进程随即进入临界区（第三轮评审指出；只在机器休眠 / SIGSTOP 下可达）。
+    try {
+      if (readFileSync(join(lock, 'pid'), 'utf8') === String(process.pid)) {
+        rmSync(lock, { recursive: true, force: true });
+      }
+    } catch {
+      rmSync(lock, { recursive: true, force: true });
+    }
   }
 }
 

@@ -76,7 +76,7 @@ export const TOOLS = [
         pr: { type: 'integer', minimum: 1, description: '折号' },
         ids: { type: 'array', items: { type: 'integer' }, description: '要标记的 conversation id，与 seed 互斥' },
         seed: { type: 'boolean', description: '清积压：不带 confirm 时只预览，不写' },
-        confirm: { type: 'boolean', description: 'seed 的第二步确认' },
+        confirm: { type: 'integer', description: 'seed 的第二步：填上一次 dry-run 报的 wouldMark 条数' },
         undo: { type: 'boolean', description: '撤销 ids 的标记' },
       },
       required: ['pr'],
@@ -189,10 +189,16 @@ export async function handleTool(
     if (args.seed === true && args.ids !== undefined) {
       throw new ZhupiFailure({ kind: 'badInput', what: 'seed 与 ids 只能给一个：seed 是整折清积压，ids 是标指定几条' });
     }
+    if (args.confirm !== undefined && typeof args.confirm !== 'number') {
+      throw new ZhupiFailure({
+        kind: 'badInput',
+        what: `confirm 要填 dry-run 报的 wouldMark 条数（整数），不是 ${JSON.stringify(args.confirm)}`,
+      });
+    }
     if (args.seed === true && args.undo === true) {
       throw new ZhupiFailure({ kind: 'badInput', what: 'seed 与 undo 是反方向的，不能一起给。撤销请用 { pr, ids, undo: true }' });
     }
-    if (args.confirm === true && args.seed !== true) {
+    if (args.confirm !== undefined && args.seed !== true) {
       throw new ZhupiFailure({ kind: 'badInput', what: 'confirm 只跟 seed 一起用（seed 的第二步）' });
     }
     // 纯入参校验**全部**放在任何网络调用之前：一是打错了不该先花一轮 API，
@@ -210,7 +216,7 @@ export async function handleTool(
 
     if (args.seed === true) {
       const targets = all.filter((e) => e.answered === 'pending');
-      if (args.confirm !== true) {
+      if (args.confirm === undefined) {
         // **只预览，不写。** seed 是全系统唯一不可逆又不可见的操作，而它吞掉的可能是
         // 他的朱批本身（zhupi 锚不到行会把批注并入总批）——评审在 #9 上实测过一次。
         return {
@@ -219,11 +225,28 @@ export async function handleTool(
           dryRun: true,
           wouldMark: targets.length,
           targets,
+          // **默认就警告。** 上一版只在 `fromDesk` 为真时警告，而第三轮评审实测
+          // 那条路径（zhupi 锚不到行降级并入总批）在生产里 **0/16 折触发过** ——
+          // 于是唯一的护栏是死的，而他 99% 的总批都是 fromDesk:false，拿到的是让人放心的那句。
           hint:
-            targets.some((t) => t.fromDesk)
-              ? '⚠️ 其中带 fromDesk 的是**他的朱批**（zhupi 锚不到行并入了总批），标掉等于让他的话从所有输出里消失。先逐条看 preview。'
-              : '看清 preview 之后再带 confirm: true 调一次才会落盘。',
+            `⚠️ 这些总批的作者 API 分不出来（共用账号）。逐条看 preview 再决定 —— ` +
+            `标掉的东西在所有工具输出里都消失，且他不可能发现。` +
+            (targets.some((t) => t.fromDesk) ? '**其中带 fromDesk 的确定是他的朱批**（zhupi 降级并入），尤其别标。' : '') +
+            `确认要标就调 { pr: ${pr}, seed: true, confirm: ${targets.length} }。`,
         };
+      }
+      // **confirm 必须报出 dry-run 看到的条数。**
+      // 上一版描述写着「两步」，代码却没挡 `{seed:true, confirm:true}` 同一次调用——
+      // 第三轮评审一次调用吞掉了他在 #2 上的 4 条真话（「能不能加点前端的设计渲染图啊」…）。
+      // 两步必须是闸门，不能是自愿。数字对不上就说明没看过预览，或者预览之后又有新话。
+      if (args.confirm !== targets.length) {
+        throw new ZhupiFailure({
+          kind: 'badInput',
+          what:
+            `seed 的第二步要写 confirm: ${targets.length}（不是 true）—— 那是刚才 dry-run 报的 wouldMark。` +
+            `收到 ${JSON.stringify(args.confirm)}。没跑过 dry-run 就先跑一次，逐条看 preview 再说：` +
+            `标掉的东西看不见也追不回，里面很可能有他的真话。`,
+        });
       }
       const { added, refreshed } = commit(pr, targets);
       return { repo: ref.slug, pr, seeded: true, added, refreshed, stateFile: storePath() };

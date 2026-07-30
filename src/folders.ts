@@ -124,7 +124,8 @@ async function hydrate(ref: RepoRef, pull: RawPull, store: ProcessedStore): Prom
   // 第三个参数是本地「已处理」记录：总批的 answered 不再靠位置推断（review#29）。
   const deskNotes = deskFallbackNotes(reviews);
   const entries = conversationEntriesOf([...issueComments, ...deskNotes]);
-  const conversation = classifyConversation(issueComments, deskNotes, handledIds(store, pull.number, entries));
+  const conversation = classifyConversation(issueComments, deskNotes, handledIds(store, pull.number, entries))
+    .map(capBody);
   return {
     ok: true,
     number: pull.number,
@@ -193,6 +194,19 @@ export const summarize = (d: FolderDetail | FolderError): FolderSummary | Folder
       };
 
 /** 某折当前全部会话区 comment id —— 灌水位用（一次清空积压）。 */
+/**
+ * 总批正文超长就截断。
+ *
+ * 立项理由是省 context，而第三轮评审实测比值从 3.9× 退到 3.47×，机制很具体：
+ * `conversation[].body` 不截断，于是 agent 自己那些千字总批被原样搬回 agent 的 context
+ * （#30 零 inline 却 6.2 KB）。要逐条回话的场景才需要全文，`attention` 已经有 preview 了。
+ */
+const BODY_CAP = 600;
+function capBody(c: ConversationItem): ConversationItem {
+  if (c.body.length <= BODY_CAP) return c;
+  return { ...c, body: `${c.body.slice(0, BODY_CAP)}…`, bodyTruncated: true, bodyLength: c.body.length };
+}
+
 /**
  * 某折全部总批的 { id, updatedAt, preview, fromDesk }。
  * `mark_handled` 要 updatedAt 记水位；`seed` 要 preview 和 fromDesk 让人看清

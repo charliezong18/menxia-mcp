@@ -148,17 +148,39 @@ describe('mark_handled 的行为（离线，注入取数口）', () => {
     expect(r.hint).toMatch(/他的朱批/);
   });
 
-  it('全都不是他的朱批时，提示换成中性的那句', async () => {
+  it('**没有 fromDesk 时也要警告** —— 那条路径生产里 0/16 折触发过，只在它为真时警告等于没护栏', async () => {
     const r = await handleTool('mark_handled', { pr: 9, seed: true },
       { entries: async () => [MINE] as never }) as any;
-    expect(r.hint).not.toMatch(/⚠️/);
-    expect(r.hint).toMatch(/confirm/);
+    expect(r.hint).toMatch(/⚠️/);
+    expect(r.hint).toMatch(/作者 API 分不出来/);
+    expect(r.hint).toMatch(/confirm: 1/);
   });
 
-  it('seed + confirm → 才落盘', async () => {
-    const r = await T({ pr: 9, seed: true, confirm: true });
+  it('**confirm 必须报出 dry-run 看到的条数**，写 true 不算', async () => {
+    // 第三轮评审用 `{seed:true, confirm:true}` 一次调用吞掉了他在 #2 上的 4 条真话。
+    // 「两步」必须是闸门，不能是自愿。
+    await expect(T({ pr: 9, seed: true, confirm: true })).rejects.toThrow(/整数/);
+    expect(load(process.env.ZHUPI_STATE_FILE!).store).toEqual({});
+  });
+
+  it('confirm 条数不对 → 拒（说明没看过预览，或预览之后又有新话）', async () => {
+    await expect(T({ pr: 9, seed: true, confirm: 1 })).rejects.toThrow(/confirm: 2/);
+    await expect(T({ pr: 9, seed: true, confirm: 5 })).rejects.toThrow(/confirm: 2/);
+    expect(load(process.env.ZHUPI_STATE_FILE!).store).toEqual({});
+  });
+
+  it('confirm 条数对上 → 才落盘', async () => {
+    const dry = await T({ pr: 9, seed: true });
+    const r = await T({ pr: 9, seed: true, confirm: dry.wouldMark });
     expect(r.seeded).toBe(true);
     expect(Object.keys(stored()).sort()).toEqual(['100', '200']);
+  });
+
+  it('dry-run 之后又来了新总批 → 旧的 confirm 数字失效，不会顺手把新话标掉', async () => {
+    const dry = await T({ pr: 9, seed: true });   // wouldMark = 2
+    const withNew = { entries: async () => [HIS, MINE, { ...HIS, id: 300, preview: '你把第 3 点搞错了' }] as never };
+    await expect(handleTool('mark_handled', { pr: 9, seed: true, confirm: dry.wouldMark }, withNew))
+      .rejects.toThrow(/confirm: 3/);
   });
 
   it('**seed + undo → 拒**。上一版会照 seed 走，把整折标掉', async () => {
@@ -167,7 +189,7 @@ describe('mark_handled 的行为（离线，注入取数口）', () => {
   });
 
   it('confirm 不跟 seed 一起给 → 拒（免得以为「加了 confirm 就稳」）', async () => {
-    await expect(T({ pr: 9, ids: [100], confirm: true })).rejects.toThrow(/只跟 seed/);
+    await expect(T({ pr: 9, ids: [100], confirm: 1 })).rejects.toThrow(/只跟 seed/);
   });
 
   it('undo 撤得掉，且**不白花一次网络**', async () => {
