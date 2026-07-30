@@ -12,7 +12,7 @@ The rollout order lives in [SPEC §8](SPEC.md). This file adds the thing the spe
 |---|---|---|
 | **0 · Route guard** | 21/21 in `guard-pr-create.test.sh`; both paths observed live (a blocked call actually refused, a legitimate call actually passed); SKILL.md and SPEC §7 agree with the code | **✅ 2026-07-28** |
 | **1 · Read-only tools** ✅ | `read_comments` returns the real annotations on a real folder with `answered` correct against a hand count; `list_folders` unanswered counts match | **✅ 2026-07-29** |
-| **2 · lint_folder** | Differential test over every open folder plus one must-fail sample per rule; new and old outputs align line by line, every difference either fixed or documented in SPEC §5.2 | not started |
+| **2 · lint_folder** | Differential test over every open folder plus one must-fail sample per rule; new and old outputs align line by line, every difference either fixed or documented in SPEC §5.2. **The ship gate was in fact replaced by the scar list** (design D7) and the differential demoted to a one-off comparison — because it dies with the old script, no-ops on 88% of the real corpus, and cannot cover the two new rules | **✅ 2026-07-30** (17/17 folders aligned, 6 deliberate improvements individually registered; scar-list mutation kill 53/59) |
 | **3 · Write tools** | One folder opened end to end through `open_folder`; two concurrent sessions provably do not collide (flock observed, not assumed); the backlink marker read back from the live PR body | not started |
 | **4 · Retirement** | With all four bash scripts deleted, one full round completes: open → read → reply; SKILL.md reduced to glossary + tool pointers; hook message points at the MCP tool; the SPEC §5.3 #6 documentation debt paid | not started |
 
