@@ -18,11 +18,12 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "sh -c 'tsc && vitest run && node scripts/print-milestones.mjs; rc=$?; node scripts/print-parity.mjs; exit $rc'",
+    "test": "sh -c 'tsc && vitest run && node scripts/print-milestones.mjs; rc=$?; node scripts/print-parity.mjs; node scripts/retire-gate.mjs || true; exit $rc'",
     "test:watch": "vitest",
     "acceptance": "npm run build && node scripts/acceptance.mjs && node scripts/lint-differential.mjs",
     "diagrams": "./render-diagrams.sh",
-    "differential": "npm run build && node scripts/lint-differential.mjs"
+    "differential": "npm run build && node scripts/lint-differential.mjs",
+    "retire-gate": "npm run build && node scripts/retire-gate.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

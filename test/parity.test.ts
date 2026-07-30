@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { AGREE, DISAGREE, NEUTRAL, RETIRE_AT, SKIPPED, parseRows, summarize } from '../src/parity.js';
+import { AGREE, DISAGREE, NEUTRAL, SKIPPED, parseRows, summarize } from '../src/parity.js';
 
 // 这个解析器支撑一个**不可逆决定**：连续 10 次零分歧就删掉 folder-lint.sh。
 // 第一轮评审在上一版（逻辑内联在 print-parity.mjs 里、零测试）抓到两个错结论。
@@ -24,7 +24,6 @@ describe('连续计数', () => {
     const s = summarize(table(...Array(9).fill(AGREE), 'SKIP_LINT 跳过（其余与上次一致）'));
     expect(s.streak).toBe(0);
     expect(s.unknown).toHaveLength(1);
-    expect(s.canRetire).toBe(false);
   });
 
   it('「**不一致**」里含「一致」子串，绝不能被当成一致', () => {
@@ -41,38 +40,16 @@ describe('连续计数', () => {
   });
 });
 
-describe('退休判据', () => {
-  it(`满 ${RETIRE_AT} 且无未知行 → 可退休`, () => {
-    expect(summarize(table(...Array(RETIRE_AT).fill(AGREE))).canRetire).toBe(true);
-  });
-
-  it(`差一次 → 不可退休`, () => {
-    expect(summarize(table(...Array(RETIRE_AT - 1).fill(AGREE))).canRetire).toBe(false);
-  });
-
-  it('**未知行在中间时也不许退休** —— 这才是那道守卫唯一起作用的场景', () => {
-    // 上一版把未知行放在**末尾**，而末尾的未知行本来就把 streak 打断成 0，
-    // 于是无论有没有 unknown 守卫都是 false —— 那条测试是为了错误的原因而绿的
-    // （第二轮评审：变异「删掉 unknown 守卫」在全量套件下存活）。
-    const s = summarize(table('看起来没问题', ...Array(RETIRE_AT).fill(AGREE)));
-    expect(s.streak).toBe(RETIRE_AT);   // 连续数满了
-    expect(s.unknown).toHaveLength(1);  // 但台账被动过
-    expect(s.canRetire).toBe(false);    // ← 守卫必须在这里起作用
-  });
-
-  it('末尾的未知行同样不许退休（顺带覆盖，但不是守卫的关键场景）', () => {
-    const s = summarize(`${table(...Array(RETIRE_AT).fill(AGREE))}\n${row('看起来没问题')}`);
-    expect(s.canRetire).toBe(false);
-  });
-
-  it('**退休门槛就是 10** —— 用字面量钉住，不跟着常量走', () => {
-    // 上一版全部用 Array(RETIRE_AT).fill()，于是「把 10 改成 1」这个变异全量存活。
-    // 而那个数字支撑的是删掉闸门这个不可逆决定。
-    expect(RETIRE_AT).toBe(10);
-    expect(summarize(table(...Array(9).fill(AGREE))).canRetire).toBe(false);
-    expect(summarize(table(...Array(10).fill(AGREE))).canRetire).toBe(true);
-  });
-});
+// ── 「退休判据」那一组整组删了（2026-07-30 晚）──
+//
+// 它测的是 `canRetire` / `RETIRE_AT`，而那条判据（连续 10 次呈折零分歧）已经作废：
+// ① 样本没判别力（88% 的折两边都零硬伤）② 被当权威的老脚本本身有假通过 bug
+// ③ 呈折搬进 MCP 之后计数冻死。新判据在 `scripts/retire-gate.mjs`，
+// 用「每条规则一个必失败样本」，九条逐条做过变异全部变红。
+//
+// **删掉而不是留着改绿**：一组仍在断言「满 10 次就能删闸门」的测试，
+// 会让下一个人以为那还是判据 —— 那正是这个项目反复反对的「会漂的副本」。
+// 「未知行让台账不可信」这条守卫没丢，它并进了上面那组（第 23 条用例）。
 
 describe('解析健壮性', () => {
   it('空表 / 只有表头 → 零行零连续', () => {
