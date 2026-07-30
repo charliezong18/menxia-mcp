@@ -92,7 +92,11 @@ const GH_WRITE_PATTERNS: Array<[RegExp, string]> = [
   // 收窄没有放走任何真调用：`run('gh pr create …')` 里 gh 就在引号后面。
   // 数组拆分的写法（`run('gh', ['pr','create'])`）这条本来就匹配不到 —— 中间隔着
   // `', ['`，`\s+` 过不去 —— 那个洞由下面新增的一条补，不靠这条。
-  [/['"`]gh\s+(pr|issue|release|repo)\s+(create|edit|merge|close|comment|delete)/, 'gh 子命令写操作'],
+  // 引号后面允许空白和 env 赋值前缀 —— 老守卫的 sed 就是先剥这两样再判段首的
+  // （`guard-pr-create.sh:34-39`）。第一轮评审 2026-07-30 实测收窄后
+  // `'  gh pr create'` 和 `'GH_TOKEN=x gh pr create'` 两种都穿了过去。
+  // 收窄本身没错，错在只抄了「段首」没抄「先剥前缀」。
+  [/['"`]\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*gh\s+(pr|issue|release|repo)\s+(create|edit|merge|close|comment|delete)/, 'gh 子命令写操作'],
   // 数组拆分的写法。`['gh', 'pr', 'create']` / `['gh','pr','edit']` 都要抓到。
   [/['"`]gh['"`]\s*,[\s\S]{0,80}?['"`](pr|issue|release|repo)['"`]\s*,\s*['"`](create|edit|merge|close|comment|delete)['"`]/, 'gh 子命令写操作（数组写法）'],
 ];
@@ -153,7 +157,16 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
         !FS_WRITE_ALLOWED.has(base) &&
         // mkdtempSync 是 Phase 3 补的：临时 worktree 靠它开目录，
         // 而上面这串原来一个字都没提它 —— 「换个写法绕过」的又一个形态。
-        /\b(writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|copyFileSync|cpSync|truncateSync|writeSync|rmSync|unlinkSync|renameSync|mkdirSync|mkdtempSync|openSync)\b/.test(code)
+        (/\b(writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|copyFileSync|cpSync|truncateSync|writeSync|rmSync|unlinkSync|renameSync|mkdirSync|mkdtempSync|openSync)\b/.test(code) ||
+          // **`node:fs/promises` 的异步名字。**（第一轮评审 2026-07-30）
+          // 上面那串全是 *Sync，于是 `import { rm } from 'node:fs/promises'; await rm(p)`
+          // 整条穿过去 —— 而拆出 FS_IMPORT_ALLOWED 之后 `session.ts` 恰好能拿到 fs，
+          // 这条正好落在新开的那个口子上。
+          //
+          // 这一串**要求后面跟括号**，上面那串不要求（为了抓 `const w = FS.writeFileSync`
+          // 这种取别名）。理由：`rm` / `mkdir` / `cp` 这些名字太短，不带括号会把散文和
+          // 普通标识符一起误报，而误报会逼人加例外、规则反而变松。
+          /\b(rm|unlink|rename|mkdir|mkdtemp|truncate|copyFile|opendir)\s*\(/.test(code))
       ) {
         out.push({ file, line, text: text.trim(), why: `写文件只允许出现在 ${listOf(FS_WRITE_ALLOWED)}` });
       }

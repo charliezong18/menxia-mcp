@@ -60,6 +60,14 @@ export interface LockOpts {
    * 一句没有测试的防御等于一句注释。
    */
   onCreated?: () => void;
+  /**
+   * 测试接缝：判定「这把锁陈旧、我要抢」之后、真去 rename 之前插一手。
+   *
+   * 与 onCreated 同一个理由 —— 变异战役里「抢锁不核对挪到手的是哪一个」原样存活。
+   * 那条防御要的时序是「判陈旧 → 被调度走 → 别人拿到了有效锁 → 我才动手抢」，
+   * 靠并发跑撞不出来。
+   */
+  onBeforeSteal?: () => void;
 }
 
 const liveByKill = (pid: number): boolean => {
@@ -109,7 +117,16 @@ export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
       // **回读确认是自己的。** 这一句关掉上面注释里那个残留竞态的另一半：
       // 如果有人在这两步之间把我的锁挪走了，我要重新排队，而不是揣着一把不存在的锁往下走。
       if (readLock(path)?.pid === process.pid) {
-        return () => { try { rmSync(path, { force: true }); } catch { /* 已经没了就算了 */ } };
+        // **释放前先确认锁还是自己的。**（第二轮评审 2026-07-30）
+        // 上一版是无脑 `rmSync`。真实场景：我持锁超过 STALE_MS（比如一次特别慢的 push），
+        // B 判我陈旧、抢走了锁并进了临界区；我这时候收工，一句 rmSync **把 B 的有效锁删掉** ——
+        // 于是 C 进来，和 B 同时在临界区里。锁越是「快到期」越容易出这事，
+        // 而慢 push 恰恰是最需要锁的时候。
+        return () => {
+          try {
+            if (readLock(path)?.pid === process.pid) rmSync(path, { force: true });
+          } catch { /* 已经没了就算了 */ }
+        };
       }
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
@@ -119,10 +136,21 @@ export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
       if (stale) {
         // 挪走再删，不直接 unlink：rename 的源只有一个，两个进程同时抢时只有一个能成，
         // 另一个拿到 ENOENT 会回去继续排队。直接 unlink 的话两个都「成功」。
+        //
+        // **挪走之后要核对挪到手的确实是刚才判陈旧的那一个。**（第二轮评审 2026-07-30）
+        // 上一版少了这一步，于是这条时序能让两个进程同时进临界区：
+        //   B 判定陈旧 → B 被调度走 → A 判定陈旧、抢锁、建新锁、回读确认，进临界区
+        //   → B 醒来执行 renameSync，**挪走的是 A 刚建的有效锁**（rename 成功）→ B 也进去了
+        // 现在挪错了就原样挪回去，继续排队。挪回去与失主的回读之间还有个亚微秒窗口，
+        // 但那时失主的回读会失败、它自己回去重排 —— 方向是安全的（多等一轮，不是同时进）。
         const aside = `${path}.stale-${process.pid}`;
+        opts.onBeforeSteal?.();
         try {
           renameSync(path, aside);
-          rmSync(aside, { force: true });
+          const got = readLock(aside);
+          const sameOne = (got === null && held === null) || (got !== null && held !== null && got.pid === held.pid && got.at === held.at);
+          if (sameOne) rmSync(aside, { force: true });
+          else renameSync(aside, path); // 抢错了 —— 那是别人刚建的有效锁，还回去
         } catch { /* 被别人抢先了，下一轮重来 */ }
         continue;
       }
@@ -154,6 +182,13 @@ function git(cwd: string, args: string[]): string {
     cwd,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
+    // **必须有超时。**（第二轮评审 2026-07-30）测试用的是 /tmp 里现造的干净仓，
+    // 它照不出真机上的两件事：全局 `commit.gpgsign=true` 会让 git 等 pinentry 弹窗，
+    // 仓里的 pre-commit / pre-push 钩子也可能等输入。没有超时的话 server 就**永远挂在那儿**，
+    // 而且锁还在手上 —— 别的会话跟着一起卡死。三分钟给慢网络的 push 留足了余量。
+    // env 可覆盖是测试接缝（同 snapshot.ts 的 ZHUPI_GIT_MAXBUFFER）：
+    // 不开这个口子，「有超时」这句话就只能靠等三分钟去证，也就是不会有人证。
+    timeout: Number(process.env.ZHUPI_GIT_TIMEOUT_MS) || 180_000,
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trimEnd();
 }
@@ -218,6 +253,27 @@ function place(src: string, wt: string, rel: string, copied: string[]): void {
 const dirOf = (p: string): string => p.slice(0, p.lastIndexOf('/'));
 
 /**
+ * 图落到仓里哪个路径。
+ *
+ * 上一版一律拍平成 `docs/assets/<basename>`。**那与奏折仓自己的布局对不上**
+ * （第三轮跨系统评审 2026-07-30）：main 上真实存在的是
+ * `docs/assets/shots/annotate.png` / `dark.png` / `setup.png`，
+ * 而 `docs/zhupi-readme.md` 正文引用的是 `assets/shots/setup.png`。
+ * zhupi 按**文档自身所在目录**解析相对路径（`render.js:27`
+ * `const baseDir = docPath.includes('/') ? docPath.slice(0, docPath.lastIndexOf('/') + 1) : ''`），
+ * 所以那条引用解析出来就是 `docs/assets/shots/setup.png` —— 拍平之后它变成断图，
+ * 而规则 4 会把账算在文档头上，让人去改正文。改完，同一篇在两折里说的话就不一样了。
+ *
+ * 规则：源路径里出现 `/assets/` 就保留它后面的整段，否则用 basename。
+ * **是规则不是推断** —— 不去猜正文引用了什么（那是 BACKLOG B3，不在本阶段）。
+ */
+export function assetTarget(src: string): string {
+  const i = src.lastIndexOf('/assets/');
+  const tail = i >= 0 ? src.slice(i + '/assets/'.length) : basename(src);
+  return `docs/assets/${tail}`;
+}
+
+/**
  * 全流程：拿锁 → fetch → 开 worktree → 拷 → commit → **跑 lint** → push → 收 worktree。
  *
  * **lint 卡在 commit 之后、push 之前**（刻意改进，SPEC §5.4）：
@@ -245,11 +301,27 @@ export async function stageFolder(
 
     const fetchFailed = tryGit(repo, ['fetch', '-q', 'origin']) === null;
 
-    if (refExists(repo, `refs/heads/${req.branch}`) || refExists(repo, `refs/remotes/origin/${req.branch}`)) {
+    // **本地有 / 远端有，是两件完全不同的事，提示不能一样。**（第二轮评审 2026-07-30）
+    // 成功路径只在 push 之后才保留本地分支，而 push 会同时建出远端分支。
+    // 所以「本地有、远端没有」唯一的来源是**上一次跑到一半死了**（SIGKILL、OOM、断电）——
+    // 那时 finally 没执行，本地分支和临时 worktree 都留着。
+    // 上一版对这种情况说的是「换个 slug」，等于让人绕开一次崩溃残留，
+    // 下次还会再撞上；而真相是「删掉它重来就行」。
+    const localHas = refExists(repo, `refs/heads/${req.branch}`);
+    const remoteHas = refExists(repo, `refs/remotes/origin/${req.branch}`);
+    if (remoteHas) {
       return fail({
         kind: 'worktree',
-        what: `分支 ${req.branch} 已经存在`,
-        hint: '重复呈折是真事故（同一篇被呈两次，他会看到两折）。要么换个 slug，要么去那折的分支上推新版本。',
+        what: `分支 ${req.branch} 在远端已经存在`,
+        hint: '重复呈折是真事故（同一篇被呈两次，他会看到两折）。先用 list_folders 看是不是已经有这一折：' +
+          '有就去那条分支上推新版本；没有折只有分支的话，是上次建折失败留下的孤儿，直接对它建折别重推。',
+      });
+    }
+    if (localHas) {
+      return fail({
+        kind: 'worktree',
+        what: `本地有分支 ${req.branch}，但远端没有 —— 这是上一次呈折崩在中途留下的残留`,
+        hint: `远端一片干净，什么都没发生过。清掉再来：git -C ${repo} worktree prune && git -C ${repo} branch -D ${req.branch}`,
       });
     }
     if (!refExists(repo, base)) {
@@ -272,7 +344,7 @@ export async function stageFolder(
         place(src, wt, rel, copied);
       }
       for (const src of req.assets ?? []) {
-        const rel = `docs/assets/${basename(src)}`;
+        const rel = assetTarget(src);
         if (seen.has(rel)) return fail({ kind: 'worktree', what: `两张图重名：${basename(src)}` });
         seen.add(rel);
         place(src, wt, rel, copied);

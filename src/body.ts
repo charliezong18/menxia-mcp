@@ -31,7 +31,21 @@ const SECTIONS: Array<[keyof FolderBody, string]> = [
   ['howto', '怎么用'],
 ];
 
-export const MARKER_RE = /<!--\s*happy-session:\s*([A-Za-z0-9_-]+)\s*-->/;
+// **两条都照 zhupi 的源码抄，不是照我的想象。**（第三轮跨系统评审 2026-07-30）
+//
+// zhupi `src/link.js:83-88` 是先松后严两步：
+//   const marked = /<!--\s*happy-session:\s*([^\s>]+)\s*-->/i.exec(text);
+//   return SESSION_ID.test(raw) ? `${HAPPY_BASE}/session/${raw}` : null;
+//   const SESSION_ID = /^[a-z0-9]{16,40}$/i;   // 锚定：`http://evil/...` 之类不得当成裸 id
+//
+// 上一版这里是 `/<!--\s*happy-session:\s*([A-Za-z0-9_-]+)\s*-->/` —— 两个方向都不对：
+// 提取比 zhupi 严（吃不到它故意放行的整条 URL 那条通道），**校验比 zhupi 松**
+// （允许 `_`、`-` 和任意长度）。后者才是真问题：`sessionId` 是可覆盖入参，
+// 传一个带连字符的 UUID 进来，`verifyMarker` 会报 ok、`open_folder` 一个警告都不出，
+// 而朱批台上那个「回奏对」按钮**静默不出现** —— 正是这个文件开头声称在防的那件事。
+export const MARKER_RE = /<!--\s*happy-session:\s*([^\s>]+)\s*-->/i;
+/** zhupi 认不认这个 id。逐字抄自 `link.js:80`。 */
+export const SESSION_ID_RE = /^[a-z0-9]{16,40}$/i;
 
 export interface BuiltBody {
   text: string;
@@ -63,7 +77,14 @@ export function buildBody(b: FolderBody, sessionId: string | null): BuiltBody {
   }
 
   let text = parts.join('\n\n');
-  if (sessionId) {
+  if (sessionId && !SESSION_ID_RE.test(sessionId)) {
+    // **埋一个 zhupi 认不出来的 id ≠ 不埋。** 埋了它，按钮照样不出现，
+    // 但这边什么都不报 —— 静默指错。宁可不埋并且说出来。
+    warnings.push(
+      `会话 id ${JSON.stringify(sessionId)} 不符合朱批台的格式（16–40 位字母数字，见 zhupi link.js:80），` +
+      '本折不埋「回奏对」标记 —— 埋了按钮也不会出现，而且没人会发现',
+    );
+  } else if (sessionId) {
     text += `\n\n<!-- happy-session: ${sessionId} -->\n`;
   } else {
     // 探不到就不埋，**绝不编**（SPEC §4.4）。按钮不出现而已；静默指错比没有更糟。
@@ -89,7 +110,15 @@ export interface MarkerCheck {
  * 会让调用方以为折没建成而重开一折 —— 那比不核更糟（SPEC §3.1 图里的橙色分支）。
  */
 export async function verifyMarker(repo: RepoRef, pr: number, sessionId: string | null): Promise<MarkerCheck> {
-  if (!sessionId) return { ok: true, unverified: false };
+  // **没埋标记时也要回读一次。**
+  //
+  // 第二轮评审（2026-07-30）指出上一版的洞：`sessionId` 为空就直接 return ok，
+  // 理由是「我没埋，所以没什么可核的」。但 body 的五段是**调用方写的文本** ——
+  // 从旧折模板复制粘贴时很容易把一行 `<!-- happy-session: … -->` 一起带进来。
+  // 那时候折上就有一个我没埋、指向别处的标记，而这边一个字都不说。
+  // 这正是本文件开头写的「静默指错比没有更糟」，只是方向反了：
+  // 我防住了「自己编一个」，没防住「别人的混进来」。
+  const expect = sessionId && SESSION_ID_RE.test(sessionId) ? sessionId : null;
   let body: string;
   try {
     const data = await get<{ body?: string | null }>(
@@ -105,13 +134,22 @@ export async function verifyMarker(repo: RepoRef, pr: number, sessionId: string 
       message: `折已经建好了，但回读核不了标记：${String((e as Error)?.message ?? e)}。折是好的，标记待确认。`,
     };
   }
-  const found = MARKER_RE.exec(body)?.[1];
-  if (found === sessionId) return { ok: true, unverified: false };
+  const found = MARKER_RE.exec(body)?.[1] ?? null;
+  if (found === expect) return { ok: true, unverified: false };
+  if (expect === null) {
+    return {
+      ok: false,
+      unverified: false,
+      message:
+        `本折没埋「回奏对」标记，但 #${pr} 的 body 里有一个 ${JSON.stringify(found)} —— ` +
+        '多半是从旧折的模板复制粘贴带进来的。它会把「回奏对」按钮指到别的会话去，删掉它。',
+    };
+  }
   return {
     ok: false,
     unverified: false,
     message: found
-      ? `body 里的会话 id 是 ${found}，不是本次的 ${sessionId} —— 回奏对按钮会把你送进别的会话。`
+      ? `body 里的会话 id 是 ${found}，不是本次的 ${expect} —— 回奏对按钮会把你送进别的会话。`
       : `标记没落进 #${pr} 的 body。补：gh pr edit ${pr} -R ${repo.slug} --body-file <(...)`,
   };
 }

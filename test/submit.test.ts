@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { slugOf, withReplyPrefix, deskUrl, REPLY_PREFIX } from '../src/submit.js';
+import { assetTarget } from '../src/worktree.js';
 import { handleTool, TOOLS } from '../src/tools.js';
 
 // 这一层第二轮评审存活过 7 个变异，原因是它的**行为**只被 `npm run acceptance` 护着，
@@ -127,5 +128,36 @@ describe('audit_folders：纯只读', () => {
     const t = TOOLS.find((x) => x.name === 'audit_folders')!;
     expect(Object.keys(t.inputSchema.properties)).toEqual([]);
     expect(t.description).toContain('只读');
+  });
+});
+
+// ── 三轮评审（2026-07-30）之后补的 ──
+
+describe('回话前缀不能毁掉块级 markdown（第三轮：zhupi 走 markdown-it 渲染 reply）', () => {
+  // `**回话** ` + 一行围栏 = 行内 code span，代码块整段糊成一段话。
+  it('首行是围栏 / 列表 / 标题 / 引用 / 表格 —— 前缀另起一段', () => {
+    for (const body of ['```ts\nconst x = 1;\n```', '- 第一条\n- 第二条', '## 小标题', '> 引文', '| a | b |']) {
+      expect(withReplyPrefix(body), body).toBe(`${REPLY_PREFIX}\n\n${body}`);
+    }
+  });
+
+  it('普通首行仍然同一行（300px 栏里别三层重复）', () => {
+    expect(withReplyPrefix('采纳，已改。')).toBe(`${REPLY_PREFIX} 采纳，已改。`);
+    expect(withReplyPrefix('`inline code` 开头也算普通行')).toBe(`${REPLY_PREFIX} \`inline code\` 开头也算普通行`);
+  });
+});
+
+describe('图落到哪个路径（第三轮：奏折仓真实布局是 docs/assets/<子目录>/…）', () => {
+  it('源路径里有 /assets/ —— 保留它后面整段', () => {
+    expect(assetTarget('/local/imgs/assets/shots/setup.png')).toBe('docs/assets/shots/setup.png');
+    expect(assetTarget('/a/assets/x/y/z.png')).toBe('docs/assets/x/y/z.png');
+  });
+
+  it('没有 /assets/ —— 退回 basename（与老行为一致）', () => {
+    expect(assetTarget('/tmp/p.png')).toBe('docs/assets/p.png');
+  });
+
+  it('取**最后**一个 /assets/，不是第一个', () => {
+    expect(assetTarget('/x/assets/old/assets/new/p.png')).toBe('docs/assets/new/p.png');
   });
 });
