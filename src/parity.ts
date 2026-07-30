@@ -1,5 +1,15 @@
-// PARITY.md 的解析。纯函数，不碰 IO —— 因为它支撑一个**不可逆决定**
-// （「连续 10 次呈折零分歧就删掉 folder-lint.sh」），必须能被单测钉住。
+// PARITY.md 的解析。纯函数，不碰 IO。
+//
+// **它已经不再决定任何事了。**「连续 10 次呈折零分歧就删掉 folder-lint.sh」这条判据
+// 2026-07-30 晚被换掉（三头都断：样本没判别力 / 被当权威的老脚本本身有假通过 bug /
+// 呈折搬进 MCP 之后计数冻死）。新判据在 `scripts/retire-gate.mjs`。
+//
+// 所以 `canRetire` 和 `RETIRE_AT` 一并删了 —— 一个叫 canRetire 的字段在它不再决定
+// 退休之后还留着，正是这个项目反复反对的「又造一个会漂的副本」：
+// 下一个人读到它会以为那还是判据。
+//
+// 留下来的部分仍有用：台账是历史记录，而「结果文本不认识 → 台账被手工编辑过」
+// 这条完整性检查值得继续跑。
 //
 // 第一轮评审在上一版（内联在 print-parity.mjs 里）抓到：
 // 判据是「第 4 格含『一致』且不含『不一致』」，于是 `SKIP_LINT 跳过（其余与上次一致）`
@@ -13,8 +23,6 @@ export const DISAGREE = '**不一致**';
 /** 这些是「不计入连续，也不算分歧」—— 环境故障与人为跳过，不是规则差异。 */
 export const NEUTRAL = ['新 lint 未成功（不计入）', '新 lint 未构建（不计入）', '呈折中止（不计入）'];
 export const SKIPPED = 'SKIP_LINT 跳过';
-
-export const RETIRE_AT = 10;
 
 export interface Row {
   at: string;
@@ -32,7 +40,6 @@ export interface Summary {
   skipped: number;
   /** 结果文本不在已知集合里的行。台账被手工编辑过就会出现，必须报出来。 */
   unknown: Row[];
-  canRetire: boolean;
 }
 
 export function parseRows(text: string): Row[] {
@@ -64,7 +71,5 @@ export function summarize(text: string): Summary {
     disagreements: rows.filter((r) => r.result === DISAGREE).length,
     skipped: rows.filter((r) => r.result === SKIPPED).length,
     unknown,
-    // 有未知行时**不许退休** —— 台账被动过，连续数不可信。
-    canRetire: streak >= RETIRE_AT && unknown.length === 0,
   };
 }
