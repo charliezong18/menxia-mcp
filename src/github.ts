@@ -111,7 +111,15 @@ export function installWriteGate(oc: Octokit, allow: readonly string[] = WRITE_A
  */
 const baseUrlOpt = (): { baseUrl?: string } => {
   const b = process.env.ZHUPI_GITHUB_BASEURL;
-  return b ? { baseUrl: b } : {};
+  if (!b) return {};
+  // **只认回环地址。** 第一轮评审（2026-07-30）指出：这个接缝会把 `gh auth token` 取来的
+  // 真 token 连同 Authorization 头一起发到任意 URL。虽然「能改你环境变量的人早就赢了」，
+  // 但这个接缝的用途只有一个 —— 指向测试起的本机 server —— 而限死回环是三行的事。
+  // 一个只在测试里用的口子，没有理由在生产里也能指向外网。
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(b)) {
+    return fail({ kind: 'badInput', what: `ZHUPI_GITHUB_BASEURL 只能指向回环地址（它是测试接缝），收到 ${b}` });
+  }
+  return { baseUrl: b };
 };
 
 /** 实例绝不导出——外面拿不到它，就没法绕开上面那道 hook。 */

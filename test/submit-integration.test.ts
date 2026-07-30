@@ -37,6 +37,10 @@ const readBody = async (req: IncomingMessage): Promise<unknown> => {
 };
 
 const ref = { owner: 'o', repo: 'r', slug: 'o/r' };
+/** 真实形态的会话 id。短串（'s1' / 'sid-explicit'）过不了 zhupi 的 SESSION_ID，会被拒埋。 */
+const SID = 'cmszzzzzzzzzzzzzzzzzzzzzz';
+/** 回话时 replyComment 会先 GET 这条批注看它是不是根。 */
+let commentMeta: { in_reply_to_id: number | null } = { in_reply_to_id: null };
 const scratches: string[] = [];
 
 beforeAll(async () => {
@@ -58,6 +62,7 @@ beforeAll(async () => {
       if (req.method === 'GET' && /^\/repos\/o\/r\/pulls\/\d+$/.test(url)) {
         return send(200, { ...prState, body: lastCreatedBody });
       }
+      if (req.method === 'GET' && /^\/repos\/o\/r\/pulls\/comments\/\d+$/.test(url)) return send(200, commentMeta);
       if (req.method === 'POST' && /\/comments\/\d+\/replies$/.test(url)) return send(201, { id: 7 });
       return send(404, { message: 'Not Found' });
     })();
@@ -85,6 +90,7 @@ beforeEach(() => {
   seen.length = 0;
   prMode = 'ok';
   prState = { state: 'open', merged_at: null };
+  commentMeta = { in_reply_to_id: null };
 });
 
 /** 假奏折仓 + 一对过得了体例的文档。 */
@@ -181,9 +187,9 @@ describe('open_folder：整条链', () => {
 
   it('显式传 sessionId —— 就用它，不去探', async () => {
     const { docs } = fixture('explicit-sid');
-    const out = await openFolder({ title: 't', body: goodBody, docs, sessionId: 'sid-explicit' }, ref);
+    const out = await openFolder({ title: 't', body: goodBody, docs, sessionId: SID }, ref);
     expect(out.warnings).toEqual([]);
-    expect(lastCreatedBody).toContain('<!-- happy-session: sid-explicit -->');
+    expect(lastCreatedBody).toContain(`<!-- happy-session: ${SID} -->`);
   }, 60_000);
 });
 
@@ -216,12 +222,12 @@ describe('audit_folders：纯只读', () => {
     // 巡检要对每折的**分支**跑体例检查，所以得真有一条分支。
     // 直接拿 open_folder 造一折 —— 顺带证明巡检读得懂它自己呈出来的东西。
     const { repo, docs } = fixture('audit-fixture');
-    await openFolder({ title: 't', body: goodBody, docs, sessionId: 's1' }, ref);
+    await openFolder({ title: 't', body: goodBody, docs, sessionId: SID }, ref);
     git(repo, ['fetch', '-q', 'origin']);
     seen.length = 0;
 
     openList = [
-      { number: 1, title: 'a', body: '<!-- happy-session: s1 -->', draft: false, head: { ref: 'audit-fixture' } },
+      { number: 1, title: 'a', body: `<!-- happy-session: ${SID} -->`, draft: false, head: { ref: 'audit-fixture' } },
       { number: 2, title: 'b', body: null, draft: true, head: { ref: 'audit-fixture' } },
     ];
     const out = await auditFolders(ref);
@@ -232,4 +238,46 @@ describe('audit_folders：纯只读', () => {
     expect(out.folders[1]!.problems.join()).toContain('不补');
     expect(out.folders[1]!.problems.join()).toContain('gh pr ready 2');
   }, 60_000);
+});
+
+// ── 三轮评审（2026-07-30）之后补的 ──
+
+describe('回复的回复要归位到串首（第三轮：zhupi 会把孤儿另起一张卡）', () => {
+  it('commentId 是一条 reply —— 换成它的根再发', async () => {
+    commentMeta = { in_reply_to_id: 555 };
+    await replyComment({ pr: 12, commentId: 999, body: '采纳' }, ref);
+    const w = writes();
+    expect(w).toHaveLength(1);
+    // 999 是 reply，555 是根 —— 发到 555 上，不发到 999
+    expect(w[0]!.url).toBe('/repos/o/r/pulls/12/comments/555/replies');
+  });
+
+  it('commentId 本来就是根 —— 原样用', async () => {
+    commentMeta = { in_reply_to_id: null };
+    await replyComment({ pr: 12, commentId: 999, body: '采纳' }, ref);
+    expect(writes()[0]!.url).toBe('/repos/o/r/pulls/12/comments/999/replies');
+  });
+});
+
+describe('巡检查的是标记的**值**，不是前缀（第三轮）', () => {
+  it('标记在但 id 朱批台认不出来 —— 报出来，不算合体例', async () => {
+    fixture('audit-badmarker');
+    openList = [{ number: 9, title: 'x', body: '<!-- happy-session: nope -->', draft: false, head: { ref: 'main' } }];
+    const out = await auditFolders(ref);
+    expect(out.folders[0]!.problems.join()).toContain('认不出来');
+  }, 60_000);
+});
+
+describe('ZHUPI_GITHUB_BASEURL 只认回环（第一轮：它会把真 token 发出去）', () => {
+  it('指向外网 —— 直接拒，不建实例', async () => {
+    const prev = process.env.ZHUPI_GITHUB_BASEURL;
+    process.env.ZHUPI_GITHUB_BASEURL = 'https://evil.example';
+    resetAuthCache();
+    try {
+      await expect(auditFolders(ref)).rejects.toThrow(/回环/);
+    } finally {
+      process.env.ZHUPI_GITHUB_BASEURL = prev;
+      resetAuthCache();
+    }
+  });
 });

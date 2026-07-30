@@ -208,6 +208,8 @@ describe('stageFolder：端到端', () => {
     }
   }, 30_000);
 
+  // 分支已存在一律拦。**「本地有」和「远端有」是两件事，提示不同** ——
+  // 逐条断言在下面「崩溃残留要说人话」那一组里。这里只钉「一定拦得住」。
   it('分支已存在 —— 明着报，不覆盖（重复呈折是真事故）', async () => {
     const { repo, scratch } = fakeReviewRepo();
     const src = mkScratch();
@@ -218,7 +220,7 @@ describe('stageFolder：端到端', () => {
         { docs: [join(src, 'a.md')], branch: 'taken', message: 'm' },
         noLint,
         { reviewPath: repo, lockPath: join(src, 'l.lock') },
-      )).rejects.toThrow(/已经存在/);
+      )).rejects.toThrow(/分支 taken/);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -290,4 +292,139 @@ describe('stageFolder：端到端', () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+// ── 第二轮评审（2026-07-30）之后补的：两条会让两个进程同时进临界区的时序 ──
+
+describe('锁的两条竞态（评审推演出来的，不是撞出来的）', () => {
+  // A 持锁超过 STALE_MS（一次特别慢的 push），B 判它陈旧抢走并进了临界区；
+  // A 这时候收工，一句 rmSync 把 B 的有效锁删掉 —— 于是 C 能和 B 同时进去。
+  it('持锁超时被人抢走后，自己 release **不能**删掉别人的锁', async () => {
+    const path = lockPath();
+    const release = await acquireLock({ lockPath: path, timeoutMs: 2_000 });
+    // 模拟「B 抢走了」：锁文件现在记着别人的 pid
+    writeFileSync(path, JSON.stringify({ pid: 424242, at: Date.now() }));
+    release();
+    expect(existsSync(path), '别人的锁被我删了').toBe(true);
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { pid: number }).pid).toBe(424242);
+  });
+
+  // B 判定陈旧 → B 被调度走 → A 判定陈旧、抢锁、建新锁、回读确认，进临界区
+  // → B 醒来 renameSync，挪走的是 A 刚建的**有效**锁（rename 成功）→ B 也进去了。
+  it('抢锁时挪到手的不是刚才判陈旧的那一个 —— 原样还回去，继续排队', async () => {
+    const path = lockPath();
+    // 摆一个陈旧锁（pid 已死）
+    writeFileSync(path, JSON.stringify({ pid: 999_998, at: Date.now() - STALE_MS - 1_000 }));
+    let swapped = false;
+    const release = await acquireLock({
+      lockPath: path,
+      timeoutMs: 5_000,
+      isAlive: (pid) => pid !== 999_998, // 只有那个陈旧 pid 算死的
+      onCreated: () => {
+        // 第一次建好锁之后立刻替换成「别人的有效锁」，模拟 A 抢先拿到 ——
+        // 回读会发现不是自己的，于是重排；重排时看到的是有效锁，等它。
+        if (!swapped) {
+          swapped = true;
+          writeFileSync(path, JSON.stringify({ pid: 999_998, at: Date.now() - STALE_MS - 1_000 }));
+        }
+      },
+    });
+    // 最终握在手里的必须是自己的
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { pid: number }).pid).toBe(process.pid);
+    release();
+  }, 20_000);
+});
+
+describe('崩溃残留要说人话（第二轮评审）', () => {
+  it('本地有分支、远端没有 —— 说是崩溃残留并给清理命令，不是「换个 slug」', async () => {
+    const { repo, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'crashed.md'), 'x\n');
+    git(repo, ['branch', 'crashed']); // 模拟上次崩在 push 之前
+    try {
+      const e = await stageFolder(
+        { docs: [join(src, 'crashed.md')], branch: 'crashed', message: 'm' },
+        async () => {},
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      ).catch((x: unknown) => x);
+      const msg = String((e as Error).message);
+      expect(msg).toContain('崩在中途');
+      expect(msg).toContain('branch -D crashed');
+      expect(msg).not.toContain('换个 slug');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('远端也有 —— 那是重复呈折，提示不一样', async () => {
+    const { repo, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'dupe.md'), 'x\n');
+    git(repo, ['branch', 'dupe']);
+    git(repo, ['push', '-q', 'origin', 'dupe']);
+    git(repo, ['fetch', '-q', 'origin']);
+    try {
+      const e = await stageFolder(
+        { docs: [join(src, 'dupe.md')], branch: 'dupe', message: 'm' },
+        async () => {},
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      ).catch((x: unknown) => x);
+      expect(String((e as Error).message)).toContain('远端已经存在');
+      expect(String((e as Error).message)).toContain('list_folders');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe('两条只能靠接缝证的防御（变异战役里原样存活过）', () => {
+  // 时序：B 判陈旧 → B 被调度走 → A 抢锁成功并进临界区 → B 才动手 rename，
+  // 挪走的是 A 刚建的**有效**锁。不核对的话 B 顺手就把它删了，两个人同时在里面。
+  it('抢锁前有人拿到了有效锁 —— 挪错了要原样还回去，不是删掉', async () => {
+    const path = lockPath();
+    const stale = { pid: 999_997, at: Date.now() - STALE_MS - 1_000 };
+    writeFileSync(path, JSON.stringify(stale));
+    const other = { pid: 424_243, at: Date.now() };
+    let swapped = false;
+    // 只等一小会儿就放弃 —— 我们要的是「它没删掉别人的锁」，不是「它拿到了锁」。
+    await expect(acquireLock({
+      lockPath: path,
+      timeoutMs: 700,
+      isAlive: (pid) => pid !== 999_997,
+      onBeforeSteal: () => {
+        // 判完陈旧、动手之前，别人拿到了有效锁
+        if (!swapped) { swapped = true; writeFileSync(path, JSON.stringify(other)); }
+      },
+    })).rejects.toThrow(/另一个会话/);
+    expect(swapped).toBe(true);
+    // 关键：别人的有效锁必须还在
+    expect(existsSync(path), '别人的有效锁被抢锁流程删了').toBe(true);
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual(other);
+  }, 20_000);
+
+  // 真机上 `commit.gpgsign=true` 会等 pinentry，仓里的钩子也可能等输入。
+  // 没有超时 = server 永远挂着**而且锁还在手上**，别的会话跟着一起死。
+  it('git 卡住（pre-commit 钩子不返回）—— 超时失败，不是永远挂着', async () => {
+    const { repo, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'hang.md'), 'x\n');
+    const hook = join(repo, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hook, '#!/bin/sh\nsleep 60\n');
+    execFileSync('chmod', ['+x', hook]);
+    const prev = process.env.ZHUPI_GIT_TIMEOUT_MS;
+    process.env.ZHUPI_GIT_TIMEOUT_MS = '1500';
+    const t0 = Date.now();
+    try {
+      await expect(stageFolder(
+        { docs: [join(src, 'hang.md')], branch: 'hangs', message: 'm' },
+        async () => {},
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      )).rejects.toThrow(/commit/);
+      expect(Date.now() - t0).toBeLessThan(20_000);
+    } finally {
+      if (prev === undefined) delete process.env.ZHUPI_GIT_TIMEOUT_MS;
+      else process.env.ZHUPI_GIT_TIMEOUT_MS = prev;
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

@@ -343,3 +343,51 @@ describe('git 写操作的作用域（2026-07-30 收窄，把边界钉住）', (
     expect(scanForMutations({ 'src/tools.ts': "sh('git', ['push'])" }).length).toBeGreaterThan(0);
   });
 });
+
+// ── 第一轮评审（2026-07-30）之后补的 ──
+
+describe('gh 子命令守卫收窄之后漏掉的两种前缀', () => {
+  // 收窄成「引号后必须紧挨 gh」是对的（否则拦住自己的错误提示文案），
+  // 但只抄了老守卫的「段首必须是 gh」，没抄它先剥前缀那一步（guard-pr-create.sh:34-39）。
+  it('引号后有空白 —— 照样抓', () => {
+    expect(scanForMutations({ 'src/x.ts': "run('  gh pr create --title x')" }).length).toBeGreaterThan(0);
+  });
+
+  it('env 赋值前缀 —— 照样抓', () => {
+    for (const code of [
+      "run('GH_TOKEN=xxx gh pr create --title x')",
+      "run('A=1 B=2 gh issue close 3')",
+    ]) {
+      expect(scanForMutations({ 'src/x.ts': code }).length, code).toBeGreaterThan(0);
+    }
+  });
+
+  it('错误提示文案仍然不误报（收窄要保住的那件事）', () => {
+    expect(scanForMutations({ 'src/submit.ts': 'hint: `网络好了补一句：gh pr create -R ${slug}`,' })).toEqual([]);
+  });
+});
+
+describe('fs/promises 的异步写方法（原来整条穿过去）', () => {
+  // 上面那串全是 *Sync。拆出 FS_IMPORT_ALLOWED 之后 session.ts 能拿到 fs，
+  // 这个洞正好落在新开的口子上。
+  it('await rm / unlink / rename / mkdir —— 都抓得到', () => {
+    for (const code of [
+      "import { rm } from 'node:fs/promises';\nawait rm(p);",
+      'await unlink(p);', 'await rename(a, b);', 'await mkdir(d, { recursive: true });',
+      'await copyFile(a, b);',
+    ]) {
+      expect(scanForMutations({ 'src/session.ts': code }).length, code).toBeGreaterThan(0);
+    }
+  });
+
+  it('白名单内的文件不受影响', () => {
+    expect(scanForMutations({ 'src/worktree.ts': 'await rm(p);' })).toEqual([]);
+  });
+
+  // 要求跟括号是刻意的：这些名字太短，不带括号会把散文和普通标识符一起误报。
+  it('不跟括号的普通标识符不误报', () => {
+    for (const code of ['const rm = 1;', 'const renamed = x;', 'obj.mkdir_flag = true;']) {
+      expect(scanForMutations({ 'src/session.ts': code }), code).toEqual([]);
+    }
+  });
+});

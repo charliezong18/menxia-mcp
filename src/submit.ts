@@ -18,7 +18,7 @@
 import { reviewRepo, reviewPath, type RepoRef } from './config.js';
 import { get, write } from './github.js';
 import { fail, ZhupiFailure } from './errors.js';
-import { buildBody, verifyMarker, type FolderBody } from './body.js';
+import { buildBody, verifyMarker, MARKER_RE, SESSION_ID_RE, type FolderBody } from './body.js';
 import { detectSessionId } from './session.js';
 import { stageFolder, type Staged } from './worktree.js';
 import { collect } from './snapshot.js';
@@ -138,19 +138,40 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
 export const REPLY_PREFIX = '**回话**';
 
 /**
- * 首行盖 `**回话**`（硬约定③）。**同一行，别空行。**
+ * 首行是块级构造吗（围栏 / 标题 / 列表 / 引用 / 表格 / 有序列表）。
  *
- * 朱批台自己已经给每条回话打了 `回话 · <login>` 标签（cards.js:45-49），reply 正文又走
+ * 第三轮跨系统评审 2026-07-30 抓到：zhupi 把 reply 正文整个过 markdown-it
+ * （`cards.js:48` `renderMarkdown(r.body)`，`render.js:2` `markdownit({ html: false, … })`），
+ * 所以 `**回话** ` + 一行围栏会被读成**行内 code span** —— 代码块整段糊成一段话。
+ * 老守卫的做法是**拒绝**（让 agent 自己改写），方向是安全的；焊死的做法必须自己处理这一类。
+ *
+ * 老实说：现存 18 条回话里**首行是块级构造的有 0 条**，这条是预防不是在修已发生的事故。
+ * 但焊死这个动作本身把「agent 自己改写」那一步拿掉了 —— 拿掉之后就得自己接住。
+ */
+const startsBlock = (line: string): boolean => /^(```|~~~|#{1,6}\s|[-*+]\s|>\s|\d+[.)]\s|\|)/.test(line);
+
+/**
+ * 首行盖 `**回话**`（硬约定③）。**默认同一行，别空行。**
+ *
+ * 朱批台自己已经给每条回话打了 `回话 · <login>` 标签（`cards.js:45-49`），reply 正文又走
  * markdown 渲染 —— 写成 `**回话**\n\n正文` 会渲染出独占一行的加粗「回话」，
- * 在他 300px 宽的批注栏里是三层重复（标签 / 前缀 / 判词）。第三轮评审实测过。
+ * 在他 300px 宽的批注栏里是三层重复（标签 / 前缀 / 判词）。
  *
- * 守卫（guard-reply-body.sh）对缺前缀的做法是**拒绝**；工具这一侧**焊死**（自动补）。
- * 理由是这个项目的既定哲学「文档写了照样能跳过，所以焊进动作本身」，
- * 而实测数据支持它：全仓 12 条回话 **0 条**带前缀。
+ * 守卫（`guard-reply-body.sh`）对缺前缀的做法是**拒绝**；工具这一侧**焊死**（自动补）。
+ * 理由是这个项目的既定哲学「文档写了照样能跳过，所以焊进动作本身」。
+ *
+ * 数据（2026-07-30 第三轮评审现数）：全仓 18 条回话，**6 条**带前缀 ——
+ * 都是守卫上线（当天 10:54）之后发的；之前的 12 条一条都没有。
+ * 也就是说散文治不住、闸门治得住，焊死是这条曲线的下一步。
+ * （旧注释写的「12 条 0 条带前缀」是守卫上线前的快照，别再引用那个数。）
  */
 export function withReplyPrefix(body: string): string {
   const text = body.replace(/^\s+/, '');
   if (text.startsWith(REPLY_PREFIX)) return text;
+  // 首行是块级构造时前缀另起一段。**这时候独占一行是对的** ——
+  // 「别空行」那条讲的是排版重复（300px 栏里三层「回话」），
+  // 而这里的代价是把他要读的代码块毁掉，两害相权很清楚。
+  if (startsBlock(text.split('\n')[0] ?? '')) return `${REPLY_PREFIX}\n\n${text}`;
   return `${REPLY_PREFIX} ${text}`;
 }
 
@@ -180,11 +201,24 @@ export async function replyComment(input: ReplyInput, ref: RepoRef = reviewRepo(
     });
   }
 
+  // **回复的回复要归位到根。** 第三轮评审留了个 NEEDS VERIFICATION：
+  // `comment_id` 传一条 reply 的 id 时 GitHub 会不会归一化到串首，仓里 18 条回话
+  // 全都指向根，数据答不了。而万一它不归一化，zhupi 会把这条当**孤儿另起一张卡**
+  // （`anchor.js:165` 找不到 in_reply_to_id 对应的根就 `roots.push(orphan)`）——
+  // 也就是一条没有引文、飘在外面的批注。不去赌，自己先查一次：非根就换成根。
+  let commentId = input.commentId;
+  const c = await get<{ in_reply_to_id?: number | null }>(
+    'GET /repos/{owner}/{repo}/pulls/comments/{comment_id}',
+    { owner: ref.owner, repo: ref.repo, comment_id: input.commentId },
+    { pageGuard: { kind: 'unknown', detail: '单条批注不该分页' }, notFound: { kind: 'notFound', repo: ref.slug, pr: input.pr } },
+  );
+  if (c.in_reply_to_id) commentId = c.in_reply_to_id;
+
   return write('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
     owner: ref.owner,
     repo: ref.repo,
     pull_number: input.pr,
-    comment_id: input.commentId,
+    comment_id: commentId,
     body: withReplyPrefix(input.body),
   });
 }
@@ -227,8 +261,15 @@ export async function auditFolders(ref: RepoRef = reviewRepo()): Promise<{ repo:
 
   for (const p of [...list].sort((a, b) => a.number - b.number)) {
     const problems: string[] = [];
-    if (!/<!--\s*happy-session:/.test(p.body ?? '')) {
+    // **查值，不是查前缀。** 老脚本 `audit-folders.sh:32` 是 `grep -q 'happy-session:'`，
+    // 于是 `<!-- happy-session: -->` 和一个格式不对的 id 都算「合体例」，
+    // 而朱批台上那个按钮根本不会出现（zhupi `link.js:88` 过不了 SESSION_ID 就返回 null）。
+    // 巡检存在的全部意义是查出这类漏执行，报个假绿等于没跑（第三轮评审）。
+    const marked = MARKER_RE.exec(p.body ?? '')?.[1];
+    if (!marked) {
       problems.push('缺「回奏对」标记 —— 不补：只能补成当前会话的 id，那是编一个（§4.4）');
+    } else if (!/^https:\/\//i.test(marked) && !SESSION_ID_RE.test(marked)) {
+      problems.push(`「回奏对」标记里的 ${JSON.stringify(marked)} 朱批台认不出来（要 16–40 位字母数字），按钮不会出现`);
     }
     if (p.draft) problems.push(`还是 draft（挡住钦此的 squash merge）—— 跑 gh pr ready ${p.number} -R ${ref.slug}`);
 
