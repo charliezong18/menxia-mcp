@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { scanForMutations, scanForGlobalState } from '../src/guard.js';
+import { scanForMutations, scanForGlobalState, FS_WRITE_ALLOWED, GIT_WRITE_ALLOWED } from '../src/guard.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -132,9 +132,9 @@ describe('R7 守卫自验：参数被拆成数组元素的写法（第一版漏�
 describe('R7 的本地写轴也要焊上（第一轮评审）', () => {
   // R7 之所以可信，靠的是一条**主动去找它**的测试。加本地写路径时没加这条，
   // 于是「往任意路径加一句 writeFileSync 能通过全部测试」。
-  it('src/ 里除 processed.ts 之外出现 fs 写就报', () => {
+  it('src/ 里不在白名单上的文件出现 fs 写就报', () => {
     const v = scanForMutations({ 'src/folders.ts': 'writeFileSync(p, x);' });
-    expect(v.map((x) => x.why)).toContain('写文件只允许出现在 src/processed.ts');
+    expect(v.map((x) => x.why)).toContain('写文件只允许出现在 src/processed.ts / src/worktree.ts');
   });
 
   it('processed.ts 自己写是允许的', () => {
@@ -185,6 +185,72 @@ describe('fs 守卫要焊 import，不能只焊调用名（第二轮评审：三
   });
 });
 
+// —— Phase 3：白名单从「单值」放宽成「Set」——
+//
+// 放松是这个项目栽跟头最多的方向。放宽本身没问题，**没人看着它变长**才是问题：
+// 往 Set 里随手加一个成员，上面那些测试一条都不会红 —— 因为它们测的是
+// 「白名单外的文件被拦」，而加成员恰恰是把文件挪到白名单**内**。
+// 所以这里钉的是**长度**：白名单变长必须同时改测试，也就是必须被人看见一次。
+describe('白名单的长度被钉死（否则它会悄悄变长）', () => {
+  it('fs 写白名单恰好两个成员，且就是这两个', () => {
+    expect([...FS_WRITE_ALLOWED].sort()).toEqual(['src/processed.ts', 'src/worktree.ts']);
+    expect(FS_WRITE_ALLOWED.size).toBe(2);
+  });
+
+  it('git 写白名单恰好一个成员 —— SPEC §4.2：唯一碰奏折仓的模块', () => {
+    expect([...GIT_WRITE_ALLOWED]).toEqual(['src/worktree.ts']);
+    expect(GIT_WRITE_ALLOWED.size).toBe(1);
+  });
+});
+
+describe('Phase 3 新豁免：正向放行，反向仍拦', () => {
+  it('worktree.ts 可以 import fs、可以 mkdtemp/copyFile/openSync', () => {
+    expect(scanForMutations({
+      'src/worktree.ts': [
+        "import { copyFileSync, mkdtempSync, openSync, rmSync } from 'node:fs';",
+        'const dir = mkdtempSync(prefix);',
+        'copyFileSync(src, dst);',
+        "const fd = openSync(lock, 'w');",
+      ].join('\n'),
+    })).toEqual([]);
+  });
+
+  it('worktree.ts 可以跑 git 写命令', () => {
+    expect(scanForMutations({
+      'src/worktree.ts': [
+        "await run('git', ['worktree', 'add', dir, '-b', slug, 'origin/main']);",
+        "await run('git', ['commit', '-m', msg]);",
+        "await run('git', ['push', '-u', 'origin', slug]);",
+      ].join('\n'),
+    })).toEqual([]);
+  });
+
+  // 反向：同样的代码换个文件名必须被拦。不测这一条的话，
+  // 「豁免是按文件给的」这句话就没有任何东西在保证。
+  it('同样的代码放在别的 src/ 文件里 —— 全部被拦', () => {
+    const fsCode = "import { copyFileSync } from 'node:fs';\ncopyFileSync(a, b);";
+    const gitCode = "await run('git', ['push', '-u', 'origin', slug]);";
+    for (const f of ['src/tools.ts', 'src/body.ts', 'src/worktrees.ts', 'src/sub/worktree.ts']) {
+      expect(scanForMutations({ [f]: fsCode }).length, `fs @ ${f}`).toBeGreaterThan(0);
+      expect(scanForMutations({ [f]: gitCode }).length, `git @ ${f}`).toBeGreaterThan(0);
+    }
+  });
+
+  // `src/sub/worktree.ts` 那一条是刻意放进去的：白名单按**完整相对路径**匹配。
+  // 按 basename 匹配的话，把文件塞进任意子目录即可全豁免 —— 第二轮评审在
+  // OCTOKIT_ALLOWED_FILE 上抓过同一个坑，这里不重犯。
+  it('子目录同名文件不享受豁免（按完整路径匹配，不按 basename）', () => {
+    expect(FS_WRITE_ALLOWED.has('src/sub/worktree.ts')).toBe(false);
+    expect(scanForMutations({ 'src/sub/worktree.ts': "import fs from 'node:fs';" }).length).toBeGreaterThan(0);
+  });
+
+  it('mkdtempSync / openSync 也在拦截名单里（原来一个字都没提）', () => {
+    for (const call of ['mkdtempSync(p)', "openSync(p, 'w')"]) {
+      expect(scanForMutations({ 'src/tools.ts': call }).length, call).toBeGreaterThan(0);
+    }
+  });
+});
+
 describe('fs 守卫不能被换个写法绕过（Phase 2 设计评审实测）', () => {
   // `node:fs/promises` 原本整条穿过去。这是守卫自己犯了它要防的那个病：
   // 「顺手换个写法」正是漏执行最自然的形态。
@@ -218,7 +284,10 @@ describe('git 写操作的作用域（2026-07-30 收窄，把边界钉住）', (
   // 放宽一次很难收回。所以边界必须有测试写下来，不能只靠注释。
   it('src/ 里的 git 写操作照拦', () => {
     for (const code of ["git('push')", 'execFileSync("git", ["commit"])', 'git push origin main']) {
-      expect(scanForMutations({ 'src/snapshot.ts': code }).some((v) => v.why === 'git 写操作'), code).toBe(true);
+      expect(
+        scanForMutations({ 'src/snapshot.ts': code }).some((v) => v.why.startsWith('git 写操作')),
+        code,
+      ).toBe(true);
     }
   });
 
