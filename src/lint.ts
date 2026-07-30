@@ -29,6 +29,8 @@ export interface Snapshot {
   assets: Set<string>;
   /** docs/.payload 或 .payload 的行 */
   payload: string[];
+  /** docs/.monolingual 的行：登记为**单语读物**，免双语对 */
+  monolingual: string[];
   /** changed 里已经在 main 上的 */
   onMain: Set<string>;
   base: { behind: number; fetchFailed: boolean };
@@ -38,6 +40,28 @@ export interface Snapshot {
 
 const EN_HEAD = (slug: string) => `**English** · [中文](${slug}.zh-CN.md)`;
 const ZH_HEAD = (slug: string) => `[English](${slug}.md) · **中文**`;
+
+/**
+ * 首行里有没有一个**解析后指向兄弟文件**的链接。
+ *
+ * 为什么不再逐字符比（第三轮评审，读 zhupi 源码）：
+ * 规则原本的立身理由是「zhupi 的语言切页按互链头认对子」—— **那是错的**。
+ * `zhupi/src/lang.js:6` 只有一条 `/\.zh-CN\.md$/i`，注释自己写着
+ * 「检测只认『同 basename + .zh-CN 后缀』这一条规则，不去猜正文语言」。
+ * zhupi 从头到尾没读过首行。
+ *
+ * 互链头的真实作用只剩一个：**在 GitHub 原生页面上互相点得到**。
+ * 所以判据改成「点得到吗」，分隔符写 `·` 还是 `|`、路径带不带 `./` 一律不管 ——
+ * 实测那正是 #12 被拦的全部原因，而它在朱批台上渲染完全正常。
+ * （zhupi 的 `link.js` 解析相对链接时也会吃掉 `./`。）
+ */
+function linksToSibling(firstLine: string, sibling: string): boolean {
+  for (const m of firstLine.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+    const target = (m[1] ?? '').trim().replace(/^\.\//, '').replace(/\s+["'].*$/, '');
+    if (target === sibling) return true;
+  }
+  return false;
+}
 
 /** 待发正文的中文版必须有的横幅。 */
 const PAYLOAD_BANNER = '不要从本页复制';
@@ -156,6 +180,16 @@ export function lint(snap: Snapshot): Finding[] {
 
     // ── 规则 1：双语对齐全（按 slug **双向**查）──
     // 巡检那边只查 .md → .zh-CN.md 单向，于是「只有中文版」的折能过巡检、过不了闸门（需求 R7）。
+    //
+    // **单语读物例外**（2026-07-30 加，第三轮评审）：`docs/.monolingual` 登记的 slug 免这条。
+    // 为什么需要它：我修掉老脚本第 58 行那个假通过 bug 之后，规则 1 第一次真正生效，
+    // 于是 #31（22 章中国官制史）被判 22 条硬伤 —— 而没人会把它翻成英文。
+    // 这类「明确的单语读物」与 `.payload`（待发正文）是同一类东西：
+    // 体例的默认假设不适用，需要一条显式登记来说明「这是有意的」。
+    // 机制照抄 `.payload`：登记项必须是相对仓根的整行路径。
+    if (snap.monolingual.includes(en) || snap.monolingual.includes(zh)) {
+      continue;
+    }
     if (!hasEn || !hasZh) {
       push(1, 'hard', base, hasEn ? `${base} 缺中文版 ${zh}（.md 放英文，.zh-CN.md 放中文）` : `${base} 缺英文版 ${en}`);
       continue;
@@ -171,14 +205,12 @@ export function lint(snap: Snapshot): Finding[] {
     // 代价是它在 zhupi 里切不了语言，由中文版的横幅兜底。**这条只存在于代码里，SKILL.md 从没写过。**
     if (payload) {
       if (!zhBody.includes(PAYLOAD_BANNER)) {
-        push(3, 'hard', base, `${base} 中文版缺「勿从本页复制」横幅（待发正文的双语必须有）`);
+        push(3, 'hard', base, `${base} 中文版缺「勿从本页复制」横幅（防止把朱批页的内容当成待发正文复制出去）`);
       }
-    } else if (firstLine(enBody) !== EN_HEAD(base)) {
-      push(2, 'hard', base, `${base} 英文版首行互链头不对，应为：${EN_HEAD(base)}`);
+    } else {
+      headCheck(push, base, en, firstLine(enBody), `${base}.zh-CN.md`, EN_HEAD(base));
     }
-    if (firstLine(zhBody) !== ZH_HEAD(base)) {
-      push(2, 'hard', base, `${base} 中文版首行互链头不对，应为：${ZH_HEAD(base)}`);
-    }
+    headCheck(push, base, zh, firstLine(zhBody), `${base}.md`, ZH_HEAD(base));
 
     // ── 规则 5：语言方向按比例（**新增**，严重度=警告，D5 已定）──
     // 老脚本完全不查内容语言，整篇翻反了不拦。
@@ -200,11 +232,20 @@ export function lint(snap: Snapshot): Finding[] {
   }
 
   // ── 规则 4：引用的图必须真在仓里（他读到断图栽过一次）──
+  // 引用相对**文档自身所在目录**解析，与 zhupi 一致
+  // （`zhupi/src/render.js:26` 注释写死「base 用 md 文件自身所在目录，不是写死的 docs/，
+  // 否则根目录或子目录的文档全解析错」）。
+  // 上一版一律按 `docs/` 拼，于是子目录文档的图 **lint 说在、zhupi 显示断图** ——
+  // 方向是漏报，正好是规则 4 唯一要防的那件事（第三轮评审）。
   const missing = new Set<string>();
   for (const f of snap.changed) {
     const md = snap.files.get(f);
     if (md === undefined) continue;
-    for (const ref of assetRefs(md)) if (!snap.assets.has(ref)) missing.add(ref);
+    const baseDir = f.includes('/') ? f.slice(0, f.lastIndexOf('/') + 1) : '';
+    for (const ref of assetRefs(md)) {
+      const resolved = normalizePath(baseDir + ref).replace(/^docs\//, '');
+      if (!snap.assets.has(resolved)) missing.add(resolved);
+    }
   }
   for (const ref of [...missing].sort()) push(4, 'hard', ref, `断图：${ref}`);
 
@@ -220,8 +261,44 @@ export function lint(snap: Snapshot): Finding[] {
   return out;
 }
 
+/**
+ * 互链头判定。**硬伤只留给「点不到对面」**，写法差异降成警告。
+ *
+ * 第三轮评审实测：17 个 open 折里 2 个被这条规则拦住，而两个都不是真问题
+ * （#12 只是分隔符写成 `|`、路径带 `./`，朱批台渲染完全正常）。
+ * 这个项目自己记着「拦太死把人逼向绕过闸门」——把误报做成硬伤就是重犯那次的错。
+ */
+function headCheck(
+  push: (r: number, s: Severity, subj: string, m: string) => void,
+  base: string,
+  file: string,
+  line: string,
+  sibling: string,
+  want: string,
+): void {
+  if (!linksToSibling(line, sibling)) {
+    // 点不到对面 = 在 GitHub 原生页面上互链断了，这才是真问题。
+    push(2, 'hard', base, `${file} 首行没有指向 ${sibling} 的链接\n    应为：${want}\n    实为：${line || '(空行)'}`);
+  } else if (line !== want) {
+    // 点得到，只是写法不一样 —— 报出来但不拦。**要给实际值**，
+    // 否则 `·`(U+00B7) 和 `|` 在等宽字体里几乎看不出差别，人拿到这条只能去 hexdump。
+    push(2, 'warn', base, `${file} 首行互链头写法与体例不同（能点到对面，不阻断）\n    应为：${want}\n    实为：${line}`);
+  }
+}
+
 const firstLine = (s: string): string => (s.split('\n')[0] ?? '').trim();
 const pct = (r: number): string => `${Math.round(r * 100)}%`;
+
+/** 折叠 `.` 与 `..`，与 zhupi `link.js` 的 normalize 同义。 */
+function normalizePath(p: string): string {
+  const out: string[] = [];
+  for (const seg of p.split('/')) {
+    if (seg === '.' || seg === '') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return out.join('/');
+}
 
 /** markdown 标题行的文字。剥代码跨度是为了不把代码块里的 `## x` 当标题。 */
 export function headings(md: string): string[] {

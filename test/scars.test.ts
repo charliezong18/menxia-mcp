@@ -57,6 +57,7 @@ function snap(over: Partial<Snapshot> = {}): Snapshot {
     changed: over.changed ?? [...files.keys()],
     assets: over.assets ?? new Set(),
     payload: over.payload ?? [],
+    monolingual: over.monolingual ?? [],
     onMain: over.onMain ?? new Set(),
     base: over.base ?? { behind: 0, fetchFailed: false },
     ...(over.body !== undefined ? { body: over.body } : {}),
@@ -393,7 +394,7 @@ describe('疤 · 严重度不许悄悄改（评审实测这类变异全存活）
   // 「规则 1 硬伤降成警告」和「规则 7 警告升成硬伤」—— 后者直接违反
   // 「拦太死把人逼向绕过」那条疤。严重度是判据的一半，必须逐条钉住。
   const S = (over: Partial<Snapshot> = {}): Snapshot => ({
-    files: new Map(), changed: [], assets: new Set(), payload: [], onMain: new Set(),
+    files: new Map(), changed: [], assets: new Set(), payload: [], monolingual: [], onMain: new Set(),
     base: { behind: 0, fetchFailed: false }, ...over,
   });
   // **取所有同规则 finding 的严重度**，不是 find 第一条 ——
@@ -442,7 +443,7 @@ describe('疤 · 2026-07-30「.payload 豁免面被悄悄放宽」（我引入�
   const S = (payload: string[]): Snapshot => ({
     files: new Map([['docs/a.md', '待发正文。'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文。\n\n不要从本页复制']]),
     changed: ['docs/a.md', 'docs/a.zh-CN.md'],
-    assets: new Set(), payload, onMain: new Set(), base: { behind: 0, fetchFailed: false },
+    assets: new Set(), payload, monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false },
   });
 
   it('带 docs/ 前缀的整行 → 豁免生效', () => {
@@ -488,9 +489,101 @@ describe('疤 · cjkRatio 必须先剥代码（strip.ts 头注释点名的危害
       ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n这里全是中文正文。'],
     ]);
     const s: Snapshot = {
-      files, changed: [...files.keys()], assets: new Set(), payload: [],
+      files, changed: [...files.keys()], assets: new Set(), payload: [], monolingual: [],
       onMain: new Set(), base: { behind: 0, fetchFailed: false },
     };
     expect(lint(s).some((f) => f.rule === 5)).toBe(false);
+  });
+});
+
+describe('疤 · 2026-07-30「互链头规则的立身理由是假的」（第三轮：读 zhupi 源码）', () => {
+  // 病历：规则原本写着「zhupi 的语言切页按互链头认对子，差一个字符就切不了」。
+  // 读源码实测：`zhupi/src/lang.js:6` 只有一条 `/\.zh-CN\.md$/i`，
+  // 注释自己写着「检测只认『同 basename + .zh-CN 后缀』这一条规则，不去猜正文语言」。
+  // **zhupi 从头到尾没读过首行。**
+  //
+  // 于是逐字符匹配 + 硬伤这个组合，实测正在拦 #12 —— 而 #12 在朱批台上渲染完全正常，
+  // 偏差只是分隔符写成 `|` 和路径带 `./`。17 个 open 折拦住 2 个，两个都不是真问题。
+  const pair = (enFirst: string): Snapshot => {
+    const files = new Map([
+      ['docs/a.md', `${enFirst}\n\nEnglish prose here.`],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。'],
+    ]);
+    return { files, changed: [...files.keys()], assets: new Set(), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+  };
+
+  it('`|` 代替 `·` → 不拦（zhupi 不看这个字符）', () => {
+    expect(hasHard(lint(pair('**English** | [中文](a.zh-CN.md)')))).toBe(false);
+  });
+
+  it('`./` 前缀 → 不拦（zhupi 的 link.js 会吃掉它）', () => {
+    expect(hasHard(lint(pair('**English** · [中文](./a.zh-CN.md)')))).toBe(false);
+  });
+
+  it('**但真的点不到对面 → 照拦**（那是 GitHub 原生页面上的互链断了）', () => {
+    expect(hasHard(lint(pair('**English** 没有链接')))).toBe(true);
+    expect(hasHard(lint(pair('**English** · [中文](wrong.zh-CN.md)')))).toBe(true);
+  });
+});
+
+describe('疤 · 2026-07-30「子目录文档的图是漏报」（第三轮：读 zhupi 源码）', () => {
+  // 病历：`zhupi/src/render.js:26` 注释写死「base 用 md 文件自身所在目录（不是写死的 docs/），
+  // 否则根目录或子目录的文档全解析错」。而上一版一律按 docs/ 拼 —— 于是图放在
+  // docs/assets/ 时 lint 说「图在」而 zhupi 显示断图。**方向是漏报**，
+  // 正好是规则 4 唯一要防的那件事。
+  const sub = (assets: string[]): Snapshot => {
+    const files = new Map([
+      ['docs/sub/x.md', '**English** · [中文](x.zh-CN.md)\n\nEnglish.\n\n![p](assets/p.png)'],
+      ['docs/sub/x.zh-CN.md', '[English](x.md) · **中文**\n\n中文正文。'],
+    ]);
+    return { files, changed: [...files.keys()], assets: new Set(assets), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+  };
+
+  it('图在 docs/sub/assets/ → 过（zhupi 就是这么解析的）', () => {
+    expect(lint(sub(['sub/assets/p.png'])).some((f) => f.rule === 4)).toBe(false);
+  });
+
+  it('**图只在 docs/assets/ → 报断图**（上一版会放行，而 zhupi 显示断图）', () => {
+    const f = lint(sub(['assets/p.png'])).filter((x) => x.rule === 4);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.subject).toBe('sub/assets/p.png');
+  });
+
+  it('顶层文档照旧按 docs/ 解析', () => {
+    const files = new Map([
+      ['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.\n\n![p](assets/p.png)'],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。'],
+    ]);
+    const s: Snapshot = { files, changed: [...files.keys()], assets: new Set(['assets/p.png']), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+    expect(lint(s).some((f) => f.rule === 4)).toBe(false);
+  });
+});
+
+describe('疤 · 2026-07-30「修好假通过之后，单语读物被拦死」（第三轮）', () => {
+  // 病历：老脚本第 58 行的假通过 bug 让规则 1 从上线起就没生效过。
+  // 我修掉它之后规则 1 第一次真正工作 —— 于是 #31（22 章中国官制史）被判 22 条硬伤。
+  // 没人会把一本中国官制史翻成英文。这类「明确的单语读物」与 .payload（待发正文）
+  // 是同一类东西：体例的默认假设不适用，需要一条**显式登记**说明「这是有意的」。
+  //
+  // 失效方向：忘了登记 → 被拦（吵，但安全）；乱登记 → 双语对失去保护（所以要显式写路径）。
+  const book = (mono: string[]): Snapshot => {
+    const files = new Map([['docs/guanzhi-01-读官名.md', '# 读官名的三把钥匙\n\n中文正文。']]);
+    return { files, changed: [...files.keys()], assets: new Set(), payload: [], monolingual: mono, onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+  };
+
+  it('登记了 → 免双语对', () => {
+    expect(lint(book(['docs/guanzhi-01-读官名.md']))).toEqual([]);
+  });
+
+  it('**没登记 → 照拦**（豁免必须是显式的，不能靠猜「这看起来像读物」）', () => {
+    expect(lint(book([])).some((f) => f.rule === 1 && f.severity === 'hard')).toBe(true);
+  });
+
+  it('登记中文版那一侧也认（两边写哪个都行）', () => {
+    expect(lint(book(['docs/guanzhi-01-读官名.zh-CN.md']))).toEqual([]);
+  });
+
+  it('别的文件不沾光', () => {
+    expect(lint(book(['docs/other.md'])).some((f) => f.rule === 1)).toBe(true);
   });
 });

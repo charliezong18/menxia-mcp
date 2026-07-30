@@ -138,8 +138,11 @@ export function collect(opts: SnapshotOpts = {}): Snapshot {
     if (content !== null) files.set(other, content);
   }
 
-  // 仓里真实存在的 assets。老脚本用 `[ -f "docs/$ref" ]`，所以引用路径是相对 docs/ 的。
-  const tree = tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'docs/assets/']) ?? '';
+  // 仓里真实存在的文件（相对 docs/）。
+  // **扫整个 docs/ 而不是只扫 docs/assets/** —— 图片引用现在按文档自身目录解析
+  // （与 zhupi `render.js:26` 一致），子目录文档会解析出 `sub/assets/p.png` 这种路径，
+  // 只扫 docs/assets/ 的话查不到（第三轮评审）。
+  const tree = tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'docs/']) ?? '';
   const assets = new Set(
     tree.split('\n').map((s) => s.trim()).filter(Boolean).map((p) => p.replace(/^docs\//, '')),
   );
@@ -154,6 +157,12 @@ export function collect(opts: SnapshotOpts = {}): Snapshot {
     .map((s) => s.trim())
     .filter(Boolean);
 
+  // 单语读物登记表。与 .payload 同一个形状。
+  const monolingual = (tryGit(cwd, ['show', `${ref}:docs/.monolingual`]) ?? '')
+    .split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean);
+
   const onMain = new Set(changed.filter((f) => tryGit(cwd, ['cat-file', '-e', `${base}:${f}`]) !== null));
 
   return {
@@ -161,6 +170,7 @@ export function collect(opts: SnapshotOpts = {}): Snapshot {
     changed,
     assets,
     payload,
+    monolingual,
     onMain,
     base: { behind, fetchFailed },
     ...(opts.body !== undefined ? { body: opts.body } : {}),
