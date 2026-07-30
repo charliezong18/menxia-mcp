@@ -54,6 +54,8 @@ export interface RawIssueComment {
   id: number;
   body: string;
   created_at: string;
+  /** 服务端最后修改时间。**必须取**：他原地编辑总批时 id 不变，只有这个字段会动。 */
+  updated_at?: string | null;
   user?: { login?: string } | null;
 }
 
@@ -65,6 +67,8 @@ export interface InlineReply {
   createdAt: string;
   /** 这句是不是他从朱批台说的（true = 他的反驳/追问，不是我方回话） */
   fromDesk: boolean;
+  /** true = 确定是我方回的（盖了 `**回话**` 前缀） */
+  ours?: boolean;
 }
 
 export interface InlineThread {
@@ -105,10 +109,18 @@ export interface ConversationItem {
   fromDesk?: boolean;
   /** handled = 我方记过已处理；pending = 要处理。不再是推断。 */
   answered: ConversationVerdict;
+  /** 服务端最后修改时间，`mark_handled` 要拿它记水位 */
+  updatedAt: string;
 }
 
 export interface Counts {
-  /** 确定要我处理：他发的、没有我方回话的 inline 批注 + 没记过已处理的总批 */
+  /**
+   * 要处理：他发的、没有我方回话的 inline 批注 + 没记过已处理的总批。
+   *
+   * **总批那一半会多报**：共用同一个 GitHub 账号，agent 历史上发的总批也算在里面，
+   * API 分不出来。别写「确定」——第一轮评审指出描述这么写会让模型跳过判断。
+   * 多报只是让人多看几条（attention 带正文预览），比漏报便宜得多。
+   */
   needsReply: number;
   /** 判不了：inline 串里最后一句的作者判不出（他可能从 GitHub 网页回的） */
   unclear: number;
@@ -165,6 +177,22 @@ export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
       user: null,
     }));
 }
+
+/**
+ * 我方 inline 回话的前缀（review-loop skill 硬约定③）。
+ *
+ * 为什么需要它：我的回话走 `/replies`，GitHub 给它自动建的 review **body 为空**；
+ * 他从 GitHub 网页在串里回一句，产生的也是空 body review。**两者在 API 里完全同形**，
+ * 于是「这串我回过了」和「他又追了一句」分不开，只能一律扔进 unclear。
+ * 盖上这个可见前缀，我方回话就变成**确定**的了。
+ *
+ * 第一轮评审抓到：我在 skill 里写了「不盖前缀 list_folders 就分不出」，
+ * 而当时**没有任何代码读它**——那句因果是编的。这里把它补成真的。
+ */
+export const OUR_REPLY_MARK = /^\s*\*\*回话\*\*/;
+
+/** 确定是我方回的：盖了 `**回话**` 前缀。没盖 ≠ 他的，只是判不了。 */
+export const isOurReply = (body: string): boolean => OUR_REPLY_MARK.test(body ?? '');
 
 /** 根批注：in_reply_to_id 缺失或为 null。**不能写 === null**，实测该 key 会整个缺失。 */
 export const isRoot = (c: RawInlineComment): boolean => c.in_reply_to_id == null;
@@ -234,13 +262,21 @@ export function buildInlineThreads(
     const span = line != null && startLine != null && line >= startLine ? line - startLine + 1 : 1;
     const replies = (repliesByRoot.get(r.id) ?? [])
       .sort((a, b) => a.created_at.localeCompare(b.created_at))
-      .map((x) => ({ id: x.id, body: x.body, createdAt: x.created_at, fromDesk: isFromDesk(x, bodies) }));
+      .map((x) => ({
+        id: x.id,
+        body: x.body,
+        createdAt: x.created_at,
+        fromDesk: isFromDesk(x, bodies),
+        ours: isOurReply(x.body),
+      }));
     const fromDesk = isFromDesk(r, bodies);
     // 「已回」= 串里**最后一句是我方说的**。
     // 只看「有没有 reply」会被他的反驳骗过去（GitHub 把整串 reply 都指向根，
     // 他在串里再反驳一句，整串就显示成已回，而那恰恰是最要紧的一条）。
     // 只看「有没有我方 reply」同样会：他反驳在后，串仍然算已回。
-    const lastIsOurs = replies.length > 0 && !replies[replies.length - 1]!.fromDesk;
+    const last = replies[replies.length - 1];
+    // 盖了 `**回话**` 的确定是我方；否则只能退回「不是朱批台来的就当我方」这个弱判据。
+    const lastIsOurs = last != null && (isOurReply(last.body) || !last.fromDesk);
     return {
       id: r.id,
       path: r.path,
@@ -295,9 +331,20 @@ export function classifyConversation(
       author: c.user?.login ?? null,
       createdAt: c.created_at,
       fromDesk: deskIds.has(c.id),
-      // **不再看位置。** 记过就是 handled，没记过就是 pending。
+      updatedAt: c.updated_at ?? c.created_at,
+      // **不再看位置。** 记过（且他之后没改过）就是 handled，否则 pending。
       answered: handled.has(c.id) ? 'handled' : 'pending',
     }));
+}
+
+/**
+ * 总批的身份清单：id + **updated_at**（没有就退回 created_at）。
+ *
+ * 单列成函数是因为这是个接缝：第二轮评审把它改成用 `created_at` 之后
+ * 175 条测试全绿，而真数据上「他编辑过的总批」立刻被吞回去 —— 原漏报复现。
+ */
+export function conversationEntriesOf(items: RawIssueComment[]): { id: number; updatedAt: string }[] {
+  return items.map((c) => ({ id: c.id, updatedAt: c.updated_at ?? c.created_at }));
 }
 
 // —— 计数 ——
@@ -308,12 +355,14 @@ export function countsOf(inline: InlineThread[], conversation: ConversationItem[
     needsReply:
       inline.filter((t) => t.fromDesk && t.replies.length === 0).length +
       conversation.filter((c) => c.answered === 'pending').length,
-    // 只剩 inline 那一类判不了：① 非朱批台来源的根批注（他从 GitHub 网页发的）；
-    // ② 朱批根批注有回话、但最后一句的作者判不出。
-    //    第三轮评审指出后者最坏：他一开口，串反而变成「已回」，工具比他不说话时更安静。
+    // 判不了的只剩两类 inline：① 非朱批台来源的根批注（他从 GitHub 网页发的，与我方同形）；
+    // ② 朱批根批注有回话、**且最后一条没盖 `**回话**` 前缀**——那句到底是我方回的
+    //    还是他从网页追的，判不了。第三轮评审指出这一类最坏：他一开口，
+    //    串反而变成「已回」，工具比他不说话时更安静。
+    //    盖了前缀的确定是我方 → 不再进 unclear（这就是那条约定的兑现处）。
     unclear:
       inline.filter((t) => !t.fromDesk).length +
-      inline.filter((t) => t.fromDesk && t.replies.length > 0).length,
+      inline.filter((t) => t.fromDesk && t.replies.length > 0 && !t.replies[t.replies.length - 1]!.ours).length,
   };
 }
 
@@ -326,8 +375,8 @@ export function attentionOf(inline: InlineThread[], conversation: ConversationIt
     } else if (!t.fromDesk) {
       // 非朱批台来源：他从 GitHub 网页发的批注与我方自己发的完全同形，判不了。
       out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'last-word-unclear' });
-    } else if (t.replies.length > 0) {
-      // 朱批根 + 有回话：最后那句到底是我方回的还是他从网页追的，判不了。
+    } else if (t.replies.length > 0 && !t.replies[t.replies.length - 1]!.ours) {
+      // 朱批根 + 有回话且没盖前缀：最后那句到底是我方回的还是他从网页追的，判不了。
       // 预览取**最后一条回话**——「我方回话：已改」和「不对，我说的是第二段」一眼可分。
       const last = t.replies[t.replies.length - 1]!;
       out.push({ kind: 'inline', id: t.id, preview: preview(last.body), createdAt: last.createdAt, why: 'reply-author-unclear' });

@@ -6,13 +6,15 @@
 import { reviewRepo, type RepoRef } from './config.js';
 import { get, repoReadable } from './github.js';
 import { fail, redact } from './errors.js';
-import { idsFor, load, type ProcessedStore } from './processed.js';
+import { handledIds, load, type ProcessedStore } from './processed.js';
 import {
   attentionOf,
   buildInlineThreads,
   classifyConversation,
   countsOf,
   deskFallbackNotes,
+  conversationEntriesOf,
+  preview,
   type AttentionItem,
   type Counts,
   type ConversationItem,
@@ -87,8 +89,9 @@ async function getPull(ref: RepoRef, pr: number): Promise<RawPull> {
   }
 }
 
-export async function readFolder(pr: number, ref: RepoRef = reviewRepo()): Promise<FolderDetail> {
-  return hydrate(ref, await getPull(ref, pr), load());
+export async function readFolder(pr: number, ref: RepoRef = reviewRepo(), store?: ProcessedStore): Promise<FolderDetail> {
+  // store 可注入：不然单测会去读用户真实的 ~/.zhupi-mcp/processed.json（第二轮评审）。
+  return hydrate(ref, await getPull(ref, pr), store ?? load().store);
 }
 
 async function hydrate(ref: RepoRef, pull: RawPull, store: ProcessedStore): Promise<FolderDetail> {
@@ -119,7 +122,9 @@ async function hydrate(ref: RepoRef, pull: RawPull, store: ProcessedStore): Prom
   const inline = buildInlineThreads(comments, reviews, pull.head.sha);
   // 把 zhupi 降级塞进 review body 的朱批一并捞出来——否则那批话在输出里根本不存在。
   // 第三个参数是本地「已处理」记录：总批的 answered 不再靠位置推断（review#29）。
-  const conversation = classifyConversation(issueComments, deskFallbackNotes(reviews), idsFor(store, pull.number));
+  const deskNotes = deskFallbackNotes(reviews);
+  const entries = conversationEntriesOf([...issueComments, ...deskNotes]);
+  const conversation = classifyConversation(issueComments, deskNotes, handledIds(store, pull.number, entries));
   return {
     ok: true,
     number: pull.number,
@@ -145,7 +150,7 @@ export async function readAll(
   ref: RepoRef = reviewRepo(),
 ): Promise<Array<FolderDetail | FolderError>> {
   const pulls = await listPulls(ref, state);
-  const store = load();
+  const store = load().store;
   const settled = await Promise.allSettled(pulls.map((p) => hydrate(ref, p, store)));
   const out = settled.map((r, i): FolderDetail | FolderError => {
     if (r.status === 'fulfilled') return r.value;
@@ -188,7 +193,21 @@ export const summarize = (d: FolderDetail | FolderError): FolderSummary | Folder
       };
 
 /** 某折当前全部会话区 comment id —— 灌水位用（一次清空积压）。 */
-export async function conversationIds(pr: number, ref: RepoRef = reviewRepo()): Promise<number[]> {
+/**
+ * 某折全部总批的 { id, updatedAt, preview, fromDesk }。
+ * `mark_handled` 要 updatedAt 记水位；`seed` 要 preview 和 fromDesk 让人看清
+ * **将要标掉什么**——评审实测 seed 会连他的朱批一起吞（#9 那句「文档是不是有点旧了」）。
+ */
+export async function conversationEntries(
+  pr: number,
+  ref: RepoRef = reviewRepo(),
+): Promise<{ id: number; updatedAt: string; preview: string; fromDesk: boolean; answered: string }[]> {
   const d = await readFolder(pr, ref);
-  return d.conversation.map((c) => c.id);
+  return d.conversation.map((c) => ({
+    id: c.id,
+    updatedAt: c.updatedAt,
+    preview: preview(c.body),
+    fromDesk: c.fromDesk === true,
+    answered: c.answered,
+  }));
 }

@@ -38,8 +38,8 @@ Not "easy first" but **"whichever is costliest to get wrong goes first"**:
 **Exit criteria** (each preceded by a test that must fail first)
 - inline: a root with a reply beneath it → answered; without → unanswered
 - inline: **self-reply → reads as answered** (design §3.1 explicitly accepts this failure; the test **pins the behaviour down** rather than avoiding it)
-- conversation: alternating (his one, mine one) → the earlier one is `"inferred"`
-- conversation: **two in a row → the first is `"inferred"`, the second is `false`** (design §3.2's known miss, likewise pinned)
+- conversation: `answered` is only `handled` / `pending` (**since review#29**: read from the local processed record, no longer inferred from position)
+- conversation: **two in a row → both `pending`** (the old positional inference silently marked the first as answered — the under-report review#29 removed)
 - conversation: a single comment → `false`
 - empty input → empty result, no exception
 - **the three-state value never returns `true`** (a hard constraint of this phase)
@@ -99,7 +99,7 @@ Not "easy first" but **"whichever is costliest to get wrong goes first"**:
 
 **Exit criteria**
 - `state=open` (default) and `merged` both correct
-- Each entry carries number, title, branch name, and **the unanswered count split three ways** (`inline` / `conversation` / `inferred`)
+- Each entry carries number, title, branch name, and **two counts** (`needsReply` / `unclear`)
 - **The counts agree with `read_comments`' full result** — one test calls both tools and compares, so the two sides cannot drift apart
 - No folders at all → empty list, no error
 

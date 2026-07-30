@@ -45,8 +45,8 @@
 - inline：他的根批注挂了我方 reply → `answered: true`；没挂 → `false`
 - inline：我方发的根批注**不计入待回**（R4 第三条）
 - inline：**判定不读 `user.login`** —— 把 fixture 里作者全抹成同一个值，结果不变
-- 总批：后面还有 → `"inferred"`；末条 → `"unknown"`；**永不返回 `false`**
-- `counts.needsReply` **不含** `unknown` 与 `inferred`
+- 总批：`answered` 只有 `handled` / `pending`（**review#29 起**：取自本地已处理记录，不再按位置推断）
+- `counts.needsReply` = 没回话的朱批 inline + `pending` 的总批（总批那一半会把我方历史留言也算进来，方向是多报）
 - 空输入 → 空结果不抛异常
 - 用 T0 的 #17 fixture 跑出：2 条他的根批注、各 1 条我方 reply、`unanswered = 0`
 
@@ -89,7 +89,7 @@
 - inline 是嵌套 `replies` 的树
 - **`line` 取 `line ?? original_line`**，另返 `outdated: boolean`
 - **`quote` 剥掉行首 diff 标记**；末行是 `\ No newline…` 时取倒数第二行；多行划选取末尾 `line - startLine + 1` 行
-- `conversation` 每条 `answered` 只能是 `"inferred"` 或 `"unknown"`，**断言全量结果里不存在 `true`/`false`**
+- `conversation` 每条 `answered` 只能是 `"handled"` 或 `"pending"`，**断言全量结果里不存在 `inferred`/`unknown`/`true`/`false`**
 - 返回 `counts`，与 `list_folders` 同名同义
 - 折号不存在 → T3 的话
 
@@ -110,7 +110,7 @@
 
 **判据（全部为正向断言，「返回空」必然变红）**
 - `read_comments(17)` → inline **恰好 2 条**根批注，各挂 **1 条** reply，`answered` 全 `true`，`counts.needsReply = 0`
-- `read_comments(18)` → conversation **恰好 2 条**，第一条 `"inferred"`、第二条 `"unknown"`，`counts.unknown = 1`
+- `read_comments(18)` → conversation **恰好 2 条**；没标记过时**两条都 `pending`**（旧位置推断会把第一条判成已答 —— 那正是 review#29 修掉的漏报），`counts.needsReply = 2`
 - `list_folders({state:'merged'})` → **不含 #10**
 - 在真的 MCP 客户端里调通两个工具
 - **把 server 写进 Charlie 的 MCP 配置**，他早上起来能直接用

@@ -166,10 +166,10 @@ The second matters most: R7 is a requirement about something *not happening*, an
 
 | Target | How |
 |---|---|
-| `threads.ts` | Pure unit tests: inline answered / unanswered / self-reply; conversation alternating / two in a row / single; empty input |
+| `threads.ts` | Pure unit tests: inline answered / unanswered / self-reply; **conversation: two in a row must both stay `pending`** (§10.7); empty input |
 | `errors.ts` | One case per mapping |
 | Read-only guard | §7, mechanism 2 |
-| Real machine | Run against **#18** → `needsReply` must be 0 (the check R3 spells out); run against **#19** (merged, zero annotations) |
+| Real machine | Run against **#18** → with nothing recorded, `needsReply` must be **2** (**changed by §10.7**: the old criterion said 0, which is exactly the under-report that was fixed); run against **#19** (merged, zero annotations) |
 
 `github.ts` gets no coverage push — it is thin and IO-heavy, and stands on the real-machine run.
 
@@ -183,7 +183,9 @@ No caching, no pagination tuning, no GraphQL, no request concurrency control. Al
 
 ## 10. Revision v3 (night of 2026-07-29, after three rounds of code review)
 
-**The conclusions of §3 and §4 changed again.** What follows was surfaced during implementation by six independent review agents using real data and local probes. The body above is left as v2; this section supersedes it.
+**The conclusions of §3 and §4 changed again.** What follows was surfaced during implementation by independent review agents using real data and local probes. The body above is left as v2; this section supersedes it.
+
+**Exception: §8's "real-machine ground truth" is a criterion, not narrative, so it was edited in place.** Review round 2 pointed out that the previous revision only declared "§3 and §4 changed", leaving §8 — the section marked "pinned, an empty result does not count as passing" — in direct contradiction with current behaviour, and that is the section a new session is most likely to copy as its acceptance standard.
 
 ### 10.1 Authorship: there is a second marker
 
@@ -221,3 +223,28 @@ Now: the Octokit instance is sealed in a module closure and never exported, `hoo
 - "`line` is 100% null in practice" — **not true at repo level**; #7's annotation has `line: 7`. #17 is all-null because that folder's annotations are outdated. The value logic is unchanged (`line ?? original_line`), but `outdated` now trusts GitHub's own signal first.
 - `quote` must pick a side: for `LEFT` (an annotation anchored on a deleted line) the `-` lines must be kept and the `+` lines dropped, otherwise it quotes a sentence he never highlighted.
 - Orphaned replies (root deleted or truncated away) become standalone threads rather than being silently dropped.
+
+### 10.7 Overall-comment `answered` now comes from a local record (review#29 + review round 1)
+
+§3.2's "infer from position in the conversation" is **dead**. It only held while the
+conversation area was a two-party channel; once the agent stopped posting folder-level
+summaries it became a one-way inbox, so `i < len-1 → answered` silently marked the
+first of two consecutive comments from him as answered (**under-report**).
+
+Current: `answered` is only `handled` / `pending`, read from the local
+`~/.zhupi-mcp/processed.json`. `counts.hasFollowUp` is removed — it counted the
+artefacts of that broken inference.
+
+R7 is restated precisely as "**no remote writes**": `processed.ts` is the only write
+path in the project, and `guard.ts` pins "no fs write under `src/` except that file".
+
+Round one of review found three more high-severity issues on top; all are now fixed:
+1. **The record is `id → the updated_at seen at the time`, not the id alone.** Editing an
+   already-handled comment in place leaves the id unchanged, so an id-only key makes the
+   new sentence never surface — the very under-report this section exists to kill, in a new shape.
+2. **`load` must distinguish "file absent" from "unreadable".** The latter refuses to write:
+   saving from a failed-read empty baseline permanently erases every folder's record
+   (measured at 2.5% under concurrency). `save` is now temp + rename; `commit` re-reads and merges.
+3. **`seed` is now two-step.** It would also mark **his own annotations** that zhupi folded
+   into the conversation area (measured on #9), and it was invisible and irreversible.
+   Without `confirm` it only previews, and `undo` was added.

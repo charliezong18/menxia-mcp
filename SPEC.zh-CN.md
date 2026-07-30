@@ -274,7 +274,7 @@ zhupi 自己那次 vanilla JS → Preact 迁移的头号风险是「修过的东
 | 阶段 | 内容 | 为什么这个顺序 |
 |---|---|---|
 | **0** ✅ | Hook 焊死路由（2026-07-28 已上线，见 §7） | 不依赖 MCP，立刻见效 |
-| **1** | server 骨架 + `list_folders` + `read_comments` | **只读、零风险**，省 context 的收益马上兑现 |
+| **1** | server 骨架 + `list_folders` + `read_comments` + `mark_handled` | 前两个**只读**；`mark_handled` 只写本地状态文件、不碰远端，可 `undo`。省 context 的收益马上兑现 |
 | **2** | `lint_folder` + §5.2 differential test 对齐 | 检查逻辑先站稳，才敢让它管写入 |
 | **3** | `open_folder` + `audit_folders` + `reply_comment` | 写入侧，含 flock/worktree/标记自核 |
 | **4** | 脚本退休；SKILL.md 瘦成「名词表 + 指向工具」；hook 改指 MCP；**还 §5.3 #6 那笔文档账**（SKILL.md 体例表第 5 行与 `open-folder.sh` 第 27 行注释里「五段缺项也拦」是假的，改成「警告」） | 收尾 |

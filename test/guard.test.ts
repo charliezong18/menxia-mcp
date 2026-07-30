@@ -128,3 +128,59 @@ describe('R7 守卫自验：参数被拆成数组元素的写法（第一版漏�
     expect(scanForMutations({ 'src/x.ts': "run('gh', ['pr', 'view', '18'])" })).toEqual([]);
   });
 });
+
+describe('R7 的本地写轴也要焊上（第一轮评审）', () => {
+  // R7 之所以可信，靠的是一条**主动去找它**的测试。加本地写路径时没加这条，
+  // 于是「往任意路径加一句 writeFileSync 能通过全部测试」。
+  it('src/ 里除 processed.ts 之外出现 fs 写就报', () => {
+    const v = scanForMutations({ 'src/folders.ts': 'writeFileSync(p, x);' });
+    expect(v.map((x) => x.why)).toContain('写文件只允许出现在 src/processed.ts');
+  });
+
+  it('processed.ts 自己写是允许的', () => {
+    expect(scanForMutations({ 'src/processed.ts': 'writeFileSync(p, x); renameSync(a, b);' })).toEqual([]);
+  });
+
+  it('各种写法都拦：append / stream / unlink / mkdir / rename', () => {
+    for (const call of [
+      'appendFileSync(p, x)', 'createWriteStream(p)', 'unlinkSync(p)',
+      'mkdirSync(d)', 'renameSync(a, b)', 'rmSync(p)', 'await writeFile(p, x)',
+    ]) {
+      expect(scanForMutations({ 'src/index.ts': call }).length, call).toBeGreaterThan(0);
+    }
+  });
+
+  it('scripts/ 不受这条管 —— 验收台清自己的临时文件是正当的', () => {
+    expect(scanForMutations({ 'scripts/acceptance.mjs': 'rmSync(stateFile);' })).toEqual([]);
+  });
+
+  it('注释里提到 writeFileSync 不算违规', () => {
+    expect(scanForMutations({ 'src/index.ts': '// 这里不能 writeFileSync(p, x)' })).toEqual([]);
+  });
+});
+
+describe('fs 守卫要焊 import，不能只焊调用名（第二轮评审：三种绕法全穿）', () => {
+  const cases: [string, string][] = [
+    ['openSync + writeSync', "const fd = openSync(p, 'w'); writeSync(fd, s);"],
+    ['取别名', 'const w = FS.writeFileSync; w(p, s);'],
+    ['copyFileSync', 'copyFileSync(a, b);'],
+    ['import fs 本身', "import { writeFileSync } from 'node:fs';"],
+    ['require fs', "const fs = require('fs');"],
+    ['import 不带 node: 前缀', "import fs from 'fs';"],
+  ];
+  for (const [name, code] of cases) {
+    it(`拦得住：${name}`, () => {
+      expect(scanForMutations({ 'src/folders.ts': code }).length, code).toBeGreaterThan(0);
+    });
+  }
+
+  it('processed.ts 自己不受限', () => {
+    for (const [, code] of cases) {
+      expect(scanForMutations({ 'src/processed.ts': code }), code).toEqual([]);
+    }
+  });
+
+  it('scripts/ 不受这条管 —— 验收台清自己的临时文件是正当的', () => {
+    expect(scanForMutations({ 'scripts/acceptance.mjs': "import { rmSync } from 'node:fs'; rmSync(f);" })).toEqual([]);
+  });
+});

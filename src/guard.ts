@@ -11,6 +11,16 @@
  *  与「别名让规则失效」是同一个坑的另一半）。 */
 export const OCTOKIT_ALLOWED_FILE = 'src/github.ts';
 
+/**
+ * 唯一允许写文件的模块。
+ *
+ * R7 从「绝对只读」精确成「不写远端」之后，本地多出了一条写路径。
+ * 第一轮评审指出：R7 之所以可信，靠的是一条**主动去找它**的测试；
+ * 而新增写轴时没有那条测试，于是「往任意路径加一句 writeFileSync 能通过全部测试」。
+ * 这条规则把写轴也焊上。
+ */
+export const FS_WRITE_ALLOWED_FILE = 'src/processed.ts';
+
 // 注意分工：R7 的**执行机制**是 github.ts 里的运行时闸门（Octokit 实例封在闭包里 +
 // hook 断言 method === 'GET' + 剔除会覆盖动词的 params）。第一轮代码评审用本地 server
 // 实证了文本扫描做不到这件事——别名、模板 route、原生 fetch、node:https、git push
@@ -61,6 +71,32 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
       // ② 即便在 github.ts 里，也只允许 octokit.request(...)，不许具名方法
       if (base === OCTOKIT_ALLOWED_FILE && /\boctokit\s*\./.test(code) && !/\boctokit\s*\.\s*request\b/.test(code)) {
         out.push({ file, line, text: text.trim(), why: '只允许 octokit.request()，具名方法可能是写操作' });
+      }
+
+      // ②′ **fs 只允许 processed.ts import**（R7 精确成「不写远端」之后的本地写轴）。
+      //
+      // 焊 import 而不是焊调用名：第二轮评审证明按名字匹配拦不住
+      // `openSync(p,'w')+writeSync`、`const w = FS.writeFileSync`、`copyFileSync` —— 三种全穿。
+      // 而「谁能拿到 fs」是收口的，绕不过去。
+      // 只管 src/：这条规则约束的是**跑起来的 server**；scripts/ 是本地验收台，
+      // 它清自己的临时文件是正当的，把它也拦了只会逼人加例外，规则反而变松。
+      if (
+        base.startsWith('src/') &&
+        base !== FS_WRITE_ALLOWED_FILE &&
+        /(from\s*['"]node:fs['"]|require\s*\(\s*['"](node:)?fs['"]\s*\)|from\s*['"]fs['"])/.test(code)
+      ) {
+        out.push({ file, line, text: text.trim(), why: `只有 ${FS_WRITE_ALLOWED_FILE} 能 import fs` });
+      }
+
+      // ②″ 再补一张网：即便 fs 是当参数传进来的，写操作的名字也拦一遍。
+      // **连「提及」都拦**（不要求后面跟括号）——`const w = FS.writeFileSync` 这种
+      // 取别名的写法后面没有括号，要求括号就漏了。注释已在上面剥掉，不会误报。
+      if (
+        base.startsWith('src/') &&
+        base !== FS_WRITE_ALLOWED_FILE &&
+        /\b(writeFileSync|appendFileSync|writeFile|appendFile|createWriteStream|copyFileSync|cpSync|truncateSync|writeSync|rmSync|unlinkSync|renameSync|mkdirSync)\b/.test(code)
+      ) {
+        out.push({ file, line, text: text.trim(), why: `写文件只允许出现在 ${FS_WRITE_ALLOWED_FILE}` });
       }
 
       // ③ octokit.request 的 route 必须以 GET 开头
