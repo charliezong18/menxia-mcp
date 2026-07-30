@@ -3,7 +3,11 @@ import { createServer, type Server } from 'node:http';
 import { buildBody, verifyMarker, MARKER_RE, SESSION_ID_RE } from '../src/body.js';
 import { resetAuthCache } from '../src/github.js';
 
-/** 真实形态的会话 id（25 位小写字母数字）。'sid123' 这种过不了 zhupi 的 SESSION_ID。 */
+/**
+ * 会话 id 样本。**形态**取自实机探测（25 位小写字母数字），**值是合成的** ——
+ * 本仓是公开的，没有理由把一个真会话的标识符钉进 git 历史。
+ * 'sid123' 那种短串过不了 zhupi 的 SESSION_ID（`link.js:80` 要 16–40 位）。
+ */
 const SID = 'cmszzzzzzzzzzzzzzzzzzzzzz';
 
 const full = {

@@ -37,7 +37,10 @@ const readBody = async (req: IncomingMessage): Promise<unknown> => {
 };
 
 const ref = { owner: 'o', repo: 'r', slug: 'o/r' };
-/** 真实形态的会话 id。短串（'s1' / 'sid-explicit'）过不了 zhupi 的 SESSION_ID，会被拒埋。 */
+/**
+ * 会话 id 样本：形态取自实机探测，**值是合成的**（公开仓，别钉真 id 进历史）。
+ * 短串（'s1' / 'sid-explicit'）过不了 zhupi 的 SESSION_ID，会被拒埋。
+ */
 const SID = 'cmszzzzzzzzzzzzzzzzzzzzzz';
 /** 回话时 replyComment 会先 GET 这条批注看它是不是根。 */
 let commentMeta: { in_reply_to_id: number | null } = { in_reply_to_id: null };
