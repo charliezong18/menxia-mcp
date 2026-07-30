@@ -1,98 +1,109 @@
-<div align="center">
-
 **English** · [中文](README.zh-CN.md)
+<div align="center">
 
 # zhupi-mcp
 
-**The agent side of [zhupi](https://github.com/charliezong18/zhupi), as an MCP server.**<br>
-zhupi is where a human reads and annotates AI-authored documents. This is the other end of that loop: the tools an agent uses to submit a document, read the annotations, and reply to each one.
+**The agent-side of [the annotation desk (zhupi)](https://github.com/charliezong18/zhupi), built as an MCP server.**<br>
+The annotation desk (zhupi) is where humans read long documents written by AI, highlight sentences, and leave comments. This repo is the other end of that loop: the set of tools used by the agent to submit a folder, read back comments, and reply to them one by one.
 
-[Spec](SPEC.md) · [Milestones](MILESTONES.md) · [Backlog](BACKLOG.md) · [zhupi (the app)](https://github.com/charliezong18/zhupi)
+[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi core](https://github.com/charliezong18/zhupi)
 
 </div>
 
 ---
 
-## Status: Phase 1 shipped (two read-only tools plus a local-write-only `mark_handled`)
+## Status: Phase 3 is live (seven tools, two of which can write to remote)
 
-**Installable and usable.** `list_folders`, `read_comments` and `mark_handled` are implemented and wired into the MCP config; 175 unit tests plus 57 real-machine assertions are green, run against live GitHub data.
+**Installable, usable.** All seven tools are implemented and tested: `list_folders` / `read_comments` / `lint_folder` / `audit_folders` are read-only, `mark_handled` only writes to local files, `open_folder` / `reply_comment` write to remote. 510 unit tests + e2e acceptance all green, running against real GitHub data.
 
-The first two write **nothing at all**. `mark_handled` writes exactly one local file (`~/.zhupi-mcp/processed.json`) and **never touches GitHub** — which is why R7 is stated precisely as "no remote writes", with a guard rule pinning "no fs write anywhere under `src/` except `processed.ts`".
+**There are only two holes for remote writes.** `WRITE_ALLOWED` is a literal whitelist, matching route templates exactly. Requests outside the whitelist are intercepted by a runtime hook (read instances still cannot issue any non-GET request):
 
-Measured context saved versus the string of `gh api` calls it replaces: **7.1×** for one folder, **3.9×** across all open folders (41 KB → 5.8 KB). That was the headline reason to build this, and the number holds.
+```
+POST /repos/{owner}/{repo}/pulls                                          create a folder
+POST /repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies                reply
+```
 
-Not yet implemented: `open_folder`, `lint_folder`, `audit_folders`, `reply_comment` — see Phase 2/3 in [MILESTONES](MILESTONES.md).
+Modifying a folder, deleting a folder, or merging a folder are all impossible. `mark_handled` only writes to `~/.zhupi-mcp/processed.json`, **without touching GitHub** — the stance for R7 is therefore "only these two are allowed for remote", and there are guard rules locking down the whitelists for fs writes and git writes (and the **length** of the whitelists is pinned down by tests, adding a member must be seen by a human once).
 
-**One piece shipped earlier and is not part of the server**: the [route guard](SPEC.md) that refuses raw `gh pr create` against the folder repo. It lives in the review-loop skill and shipped first on purpose — see "What MCP does not fix" below.
+Measured context saved (compared to the old `gh api` chain): reading a single folder **7.1×**, reading all open folders **3.9×** (41 KB → 5.8 KB). This is the number one reason for building this thing; the numbers hold up.
 
-Install:
+The gains on the submit a folder side are another matter: **the agent does not touch `~/Developer/review` at all** (branching, copying files, commit, push are all in a temporary worktree managed by the server, serialized across sessions with file locks), whereas before that entire segment was only written in the prose of SKILL.md — this project measured its own prose omission rate to be 37.5%.
+
+**There is another piece that went live early and does not belong to the server**: the [route guard](SPEC.zh-CN.md) that rejects bare `gh pr create` against the folder repo. It lives in the review-loop skill, and was shipped first deliberately — the reason is in "What MCP cannot cure" below.
+
+Installation:
 ```json
 { "mcpServers": { "zhupi": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
 ```
-Run `npm install && npm run build` first. Authentication borrows the machine's existing `gh`; no separate PAT.
+Run `npm install && npm run build` first. Authentication borrows the existing `gh` on the machine, no need to configure a separate PAT.
 
-Where things stand: [MILESTONES](MILESTONES.md) · [OPEN-QUESTIONS](OPEN-QUESTIONS.md)
+Progress and open questions: [MILESTONES](MILESTONES.zh-CN.md) · [OPEN-QUESTIONS](OPEN-QUESTIONS.zh-CN.md)
 
-## Why
+## Why build it
 
-The agent side of this loop already works. It lives in a `~/.claude/skills/review-loop/` skill: one 8KB prose file plus four bash scripts. It got hardened on 2026-07-28 after measuring what actually leaked — 3 of 8 submissions missed a required marker, 11 documents shipped without their translation pair. The conclusion was that prose reminders do not cure missed execution, only gates do, so the rules moved into scripts.
+The agent side of this loop could already run, living in the `~/.claude/skills/review-loop/` skill: an 8KB prose plus four bash scripts. It just went through a round of hardening on 2026-07-28, prompted by measuring what was actually missed — out of eight submit a folder actions, three missed required markers, and eleven documents lacked translation pairs. The conclusion is that prose reminders cannot cure omission; only gates can, so the rules were moved into the scripts.
 
-That fixed the rules. It did not fix three other things:
+That fixed the rules, but left three other things unfixed:
 
-| | The pain |
+| | Where it hurts |
 |---|---|
-| **Cross-harness** | A Claude Code skill only exists inside Claude Code. Every other agent runtime — Antigravity, Codex, the desktop app — cannot submit a document at all |
-| **Context cost of reading back** | "Read the annotations" is a string of `gh api` calls plus the model parsing threads and inline positions by hand, every single time. Structured JSON collapses that to one call |
-| **Untyped inputs** | Required fields live in prose. A missing one surfaces when a shell script dies halfway, not when the call is made |
+| **Cross-harness** | Claude Code's skill only exists inside Claude Code. Other agent runtimes — Antigravity, Codex, desktop clients — simply cannot submit a folder |
+| **Context cost of reading back** | "Reading comments" is a chain of `gh api` plus manual model parsing of threads and inline positions, which must be repeated from scratch every time. Structured JSON can compress it into a single call |
+| **Untyped inputs** | Required fields are written in prose. If missed, you only know when the shell script dies halfway through, instead of at the exact point of call |
 
-## What MCP does *not* fix
+## What MCP cannot cure
 
-Worth saying plainly, because it is the obvious thing to assume: **an MCP server does not stop an agent from bypassing it.** The model can still shell out to `gh pr create` and skip every gate. Moving the logic from bash to TypeScript changes the implementation, not the routing.
+This must be stated plainly, because it is exactly where assumptions are easiest to make: **an MCP server cannot stop an agent from bypassing it.** The model can still shell out directly and run `gh pr create`, skipping all gates. Moving logic from bash to TypeScript swaps the implementation, not the routing.
 
-What blocks the route is a `PreToolUse` hook that refuses raw `gh pr create` against the review repo. That is ten lines of config, it is independent of this repo, and it ships first ([SPEC §7](SPEC.md)).
+What blocks the routing is a `PreToolUse` hook — rejecting bare `gh pr create` against the folder repo. That is a ten-line config, independent of this repo, and went live first ([SPEC §7](SPEC.zh-CN.md)).
 
-This distinction is the reason the spec exists. If you are considering the same move, decide which of the two problems you actually have.
+This distinction is the reason this spec exists. If you are also considering the same thing, first figure out exactly which problem you have on hand.
 
-## Tool surface
+## Tools surface
 
-Six tools; **the two marked ✅ are shipped**. Merging is deliberately not one of them — that is the human's click, in the app.
+Seven, all live. merge is deliberately excluded — that is clicked by the human in the app ("sealed (squash-merged)"), and there is no reason for the agent side to hold this capability.
 
-| Tool | What it does |
-|---|---|
-| `open_folder` | Submit a document: branch, commit, push, open the PR, weld in the backlink marker, verify it landed |
-| `lint_folder` | Check house style before submitting |
-| `audit_folders` | Sweep everything already open for gaps |
-| `list_folders` ✅ | List folders, most-recently-active first, with counts and previews of what needs a look |
-| `read_comments` ✅ | Read annotations as structured JSON, with authorship and `answered` computed server-side |
-| `reply_comment` | Reply to one annotation, or post an overall comment |
+| Tool | What it does | What it writes |
+|---|---|---|
+| `open_folder` | The full submit a folder process: copy documents into a temporary worktree, branch, commit, **check house style**, push, open PR, hardcode return-to-session markers, read back for self-verification | Remote (create a folder) |
+| `reply_comment` | Reply to an inline comment, the `**回话**` prefix is hardcoded | Remote (reply) |
+| `mark_handled` | Record "I have handled this conversation comment" | Local file |
+| `lint_folder` | Check house style before submit a folder | — |
+| `audit_folders` | Scan all open ones, report gaps | — |
+| `list_folders` | List all folders, sorted by recent activity, with counts and previews of body to read | — |
+| `read_comments` | Read comments into structured JSON, author determination and answered state are pre-calculated by the server | — |
+
+**`reply_comment` cannot post a conversation comment**, this is deliberate: a conversation comment posted by the agent is morphologically identical to the repo owner's in the API (sharing an account), and would turn into un-clearable false todos, measured to over-report by 77%. Folder-level summaries are spoken in the chat.
+
+**`audit_folders` has no `--fix`**: of the two things that can be mechanically patched, one is wrong (patching the return-to-session marker can only patch in the id of the *current* session, which is fabricating one), and one is unsafe (graduating a draft is not supported by REST, requiring GraphQL, and opening that endpoint equals opening all mutations).
 
 ## How it works
 
-![The review loop](assets/loop.png)
+![Loop overview](assets/loop.png)
 
-The repo in the middle is the whole interface. Neither side calls the other; both talk to GitHub. That is why zhupi can be taken off at any time, and why this server can be swapped for a bash script without the human noticing.
+**The repo right in the middle is the entire interface.** Neither side calls the other; they each only talk to GitHub. So the annotation desk (zhupi) can be unhooked at any time, and this server can also be swapped back to bash scripts without the human side noticing at all.
 
-Node + TypeScript, stdio transport, installed by absolute path — no global npm state. GitHub auth is borrowed from `gh auth token` rather than managing a second PAT.
+Node + TypeScript, stdio transport, installed by absolute path — touching no global npm state. GitHub authentication directly borrows `gh auth token`, without separately managing a PAT.
 
-## Known limits
+## Known boundaries
 
-Honest list, in advance:
+Ugly words up front:
 
-- **The concurrency fix is a file lock, not a queue.** A stdio MCP server is one process per session, not a shared daemon, so it cannot serialize across sessions on its own. `flock` plus a throwaway worktree does the job; the mechanism is worth knowing before you assume otherwise.
-- **The session-backlink marker is best-effort.** It is detected by walking the process tree, which works only when the caller is a descendant of the host CLI. When it cannot be detected, nothing is embedded — a silently wrong id is worse than a missing button.
-- **The lint rewrite is where the risk is.** The existing bash checks have accumulated fixes that a rewrite can silently drop. [SPEC §5](SPEC.md) documents each rule's *actual* behaviour (which drifts from its documentation in three places) and requires a differential test against the old scripts before shipping.
-- **Personal-scale by design.** One reviewer, one review repo, no multi-tenant story.
+- **Concurrency prevention relies on file locks, not queuing.** A stdio-based MCP server is one process per session, not a shared resident service, and cannot serialize across sessions on its own. `flock` plus a disposable worktree gets the job done, but the mechanism must be stated clearly upfront; don't think of it as a "resident single process".
+- **The return-to-session marker is best-effort.** It relies on crawling the process tree for detection, and only holds true when the caller is a descendant of the host CLI. If undetected, nothing is buried — silently pointing to the wrong thing is worse than having no button.
+- **Risk is concentrated in the lint rewrite.** The existing bash checks have accumulated a batch of fixes, and a rewrite is the easiest way to quietly drop them. [SPEC §5](SPEC.zh-CN.md) records the **actual behavior** of each rule line by line (there are three places inconsistent with its own documentation), and requires running a differential test before launch to align with the old script line by line.
+- **Designed at a personal scale.** One reviewer, one folder repo; no plans for multi-tenancy.
 
-## Fork it
+## Fork to use
 
-The repo name and local checkout path are configuration, not constants:
+The folder repo name and local checkout path are configs, not constants:
 
 ```
-ZHUPI_REVIEW_REPO=<owner>/<repo>     default: charliezong18/review
-ZHUPI_REVIEW_PATH=<path>             default: ~/Developer/review
+ZHUPI_REVIEW_REPO=<owner>/<repo>     default charliezong18/review
+ZHUPI_REVIEW_PATH=<path>             default ~/Developer/review
 ```
 
-The conventions the tools enforce — bilingual pairs, cross-link headers, the five-section PR body — are one person's house style. Fork and change them; they are rules in one module, not assumptions spread through the code.
+The conventions forced by the tools — bilingual pairs, cross-linked headers, five-paragraph PR bodies — are one person's house style. Just fork it and change them; they are rules in one module, not implicit assumptions scattered everywhere in the code.
 
 ## License
 
