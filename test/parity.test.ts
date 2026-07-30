@@ -50,11 +50,27 @@ describe('退休判据', () => {
     expect(summarize(table(...Array(RETIRE_AT - 1).fill(AGREE))).canRetire).toBe(false);
   });
 
-  it('**台账里有不认识的结果文本 → 一律不许退休**（被手工编辑过，计数不可信）', () => {
-    const rows = [...Array(RETIRE_AT).fill(AGREE)];
-    const s = summarize(`${table(...rows)}\n${row('看起来没问题')}`);
-    expect(s.unknown).toHaveLength(1);
+  it('**未知行在中间时也不许退休** —— 这才是那道守卫唯一起作用的场景', () => {
+    // 上一版把未知行放在**末尾**，而末尾的未知行本来就把 streak 打断成 0，
+    // 于是无论有没有 unknown 守卫都是 false —— 那条测试是为了错误的原因而绿的
+    // （第二轮评审：变异「删掉 unknown 守卫」在全量套件下存活）。
+    const s = summarize(table('看起来没问题', ...Array(RETIRE_AT).fill(AGREE)));
+    expect(s.streak).toBe(RETIRE_AT);   // 连续数满了
+    expect(s.unknown).toHaveLength(1);  // 但台账被动过
+    expect(s.canRetire).toBe(false);    // ← 守卫必须在这里起作用
+  });
+
+  it('末尾的未知行同样不许退休（顺带覆盖，但不是守卫的关键场景）', () => {
+    const s = summarize(`${table(...Array(RETIRE_AT).fill(AGREE))}\n${row('看起来没问题')}`);
     expect(s.canRetire).toBe(false);
+  });
+
+  it('**退休门槛就是 10** —— 用字面量钉住，不跟着常量走', () => {
+    // 上一版全部用 Array(RETIRE_AT).fill()，于是「把 10 改成 1」这个变异全量存活。
+    // 而那个数字支撑的是删掉闸门这个不可逆决定。
+    expect(RETIRE_AT).toBe(10);
+    expect(summarize(table(...Array(9).fill(AGREE))).canRetire).toBe(false);
+    expect(summarize(table(...Array(10).fill(AGREE))).canRetire).toBe(true);
   });
 });
 

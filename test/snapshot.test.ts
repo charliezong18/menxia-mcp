@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { collect, dirtyDocs, NotAGitWorktree } from '../src/snapshot.js';
+import { GitOutputTooLarge, collect, dirtyDocs, NotAGitWorktree } from '../src/snapshot.js';
 import { lint } from '../src/lint.js';
 
 // snapshot 是 lint 侧唯一碰 IO 的模块，所以这里造真 git 仓。
@@ -171,5 +171,34 @@ describe('巡检形态：按 ref 采别的分支', () => {
   it('传 ref 就能采那个分支，不用 checkout', () => {
     const s = collect({ worktree: wt, ref: 'revise', base: 'main', skipFetch: true });
     expect(s.changed).toEqual(['docs/old.md']);
+  });
+});
+
+describe('ENOBUFS 不许被当成「文件不存在」（第二轮评审）', () => {
+  // 上一版一律 catch { return null }，于是 git 输出超限被静默降级成「文件不存在」——
+  // 双向都错：谎报缺译本 + 让规则 4 整条不跑。把 maxBuffer 抬高只是把门槛挪远，病灶还在。
+  //
+  // 这组用 ZHUPI_GIT_MAXBUFFER 把上限压到极小来**真**触发那条路径。
+  // 第一版我写成「断言异常类存在」——那是恒绿，而「测试恒绿」正是这个项目栽过五次的病。
+  it('**真·超限 → 抛 GitOutputTooLarge**，不是静默变成「没有文档」', () => {
+    process.env.ZHUPI_GIT_MAXBUFFER = '8';
+    try {
+      expect(() => collect({ worktree: wt, skipFetch: true })).toThrow(GitOutputTooLarge);
+    } finally {
+      delete process.env.ZHUPI_GIT_MAXBUFFER;
+    }
+  });
+
+  it('错误话里说清这是工具限制，不是体例结论', () => {
+    process.env.ZHUPI_GIT_MAXBUFFER = '8';
+    try {
+      expect(() => collect({ worktree: wt, skipFetch: true })).toThrow(/工具限制.*不是「文件不存在」/);
+    } finally {
+      delete process.env.ZHUPI_GIT_MAXBUFFER;
+    }
+  });
+
+  it('正常上限下不误触发', () => {
+    expect(() => collect({ worktree: wt, skipFetch: true })).not.toThrow();
   });
 });

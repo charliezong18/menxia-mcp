@@ -12,15 +12,25 @@
 // 那个文件的头注释就写着 differential 最需要的教训：「返回空必然变红」。
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const OLD = `${process.env.HOME}/.claude/skills/review-loop/folder-lint.sh`;
-const NEW = join(root, 'dist', 'lint-cli.js');
-const REVIEW = `${process.env.HOME}/Developer/review`;
+// 路径可覆盖 + **存在性先查**。上一版硬编码且不查，老脚本不在时它会报
+// 10 条「未归类的差异 / 新多出 1:hard:a」—— 把人送去追一个不存在的规则差异（第二轮评审）。
+const OLD = process.env.ZHUPI_OLD_LINT ?? `${process.env.HOME}/.claude/skills/review-loop/folder-lint.sh`;
+const NEW = process.env.ZHUPI_NEW_LINT ?? join(root, 'dist', 'lint-cli.js');
+const REVIEW = process.env.ZHUPI_REVIEW_REPO_PATH ?? `${process.env.HOME}/Developer/review`;
+
+for (const [label, p] of [['老脚本', OLD], ['新 CLI', NEW]]) {
+  if (!existsSync(p)) {
+    console.error(`跑不了 differential：${label}不存在 —— ${p}\n` +
+      (p === NEW ? '先 npm run build。' : '设 ZHUPI_OLD_LINT 指到它，或者它已经退休了（那就该删掉这个脚本）。'));
+    process.exit(2);
+  }
+}
 
 let pass = 0;
 let fail = 0;

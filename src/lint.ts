@@ -70,7 +70,9 @@ export function assetRefs(md: string): string[] {
   // 代价是要自己剥掉 title（`![x](assets/a.png "说明")`）和锚点。
   for (const m of prose.matchAll(/\]\((assets\/[^)]+)\)/g)) out.add(cleanRef(m[1]!));
   // 引用式链接定义：`[p]: assets/a.png`
-  for (const m of prose.matchAll(/^\s{0,3}\[[^\]]+\]:\s*(\S+)/gm)) {
+  // 取到**行尾**再收拾，不用 `\S+` —— 那正是上一条刚修掉的空格文件名 bug，
+  // 我在新加的这个分支里又种了一遍（第二轮评审抓到）。
+  for (const m of prose.matchAll(/^\s{0,3}\[[^\]]+\]:\s*(.+)$/gm)) {
     const r = cleanRef(m[1]!);
     if (r.startsWith('assets/')) out.add(r);
   }
@@ -86,7 +88,10 @@ export function assetRefs(md: string): string[] {
  * 与磁盘上 `site plan.png` 不同的名字，于是误报断图，而 GitHub 渲染是正常的（评审实测）。
  */
 function cleanRef(ref: string): string {
-  let r = ref.trim().replace(/\s+["'].*$/, '').replace(/#.*$/, '').trim();
+  // **不剥 `#`。** 上一版无条件剥，于是磁盘上真叫 `plan#2.png` 的图变成假断图 ——
+  // 老脚本放行、新版判硬伤，而这个行为改变没登记进刻意改进表（第二轮评审）。
+  // markdown 里给图片路径加锚点本来就没意义，不值得为它误伤真文件名。
+  let r = ref.trim().replace(/\s+["'].*$/, '').trim();
   try {
     r = decodeURIComponent(r);
   } catch {

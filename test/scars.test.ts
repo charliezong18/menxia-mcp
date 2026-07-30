@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { assetRefs, lint, hasHard, type Snapshot } from '../src/lint.js';
+import { assetRefs, cjkRatio, lint, hasHard, type Snapshot } from '../src/lint.js';
 import { stripCode } from '../src/strip.js';
 import { collect } from '../src/snapshot.js';
 
@@ -376,8 +376,15 @@ describe('疤 · 2026-07-30「带空格文件名的断图漏报」（我引入�
     expect(assetRefs(base('![p][k]\n\n[k]: assets/ref.png'))).toContain('assets/ref.png');
   });
 
-  it('锚点要剥掉', () => {
-    expect(assetRefs(base('![p](assets/a.png#frag)'))).toEqual(['assets/a.png']);
+  it('**锚点不剥** —— 剥了会让真叫 `plan#2.png` 的图变成假断图', () => {
+    // 上一版无条件剥 `#.*`，第二轮评审指出：老脚本放行、新版判硬伤，
+    // 而这个行为改变没登记进刻意改进表。给图片路径加锚点本来就没意义，
+    // 不值得为它误伤真文件名。
+    expect(assetRefs(base('![p](assets/plan#2.png)'))).toEqual(['assets/plan#2.png']);
+  });
+
+  it('引用式定义里带空格的文件名也要认 —— 修 F4 时在新分支里又种了一遍同一个 bug', () => {
+    expect(assetRefs(base('![p][k]\n\n[k]: assets/plan b.png'))).toContain('assets/plan b.png');
   });
 });
 
@@ -389,12 +396,19 @@ describe('疤 · 严重度不许悄悄改（评审实测这类变异全存活）
     files: new Map(), changed: [], assets: new Set(), payload: [], onMain: new Set(),
     base: { behind: 0, fetchFailed: false }, ...over,
   });
-  const sev = (f: ReturnType<typeof lint>, rule: number) => f.find((x) => x.rule === rule)?.severity;
+  // **取所有同规则 finding 的严重度**，不是 find 第一条 ——
+  // 上一版用 find，于是规则 2「中文版互链头」那条从未被断言，
+  // 变异（hard→warn）在全量套件下存活（第二轮评审）。
+  const sevs = (f: ReturnType<typeof lint>, rule: number) => [...new Set(f.filter((x) => x.rule === rule).map((x) => x.severity))];
+  const sev = (f: ReturnType<typeof lint>, rule: number) => sevs(f, rule)[0];
 
   it('硬伤那四条必须是 hard', () => {
     expect(sev(lint(S({ files: new Map([['docs/a.md', 'x']]), changed: ['docs/a.md'] })), 1)).toBe('hard');
-    const withHead = new Map([['docs/a.md', '错的头'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。']]);
-    expect(sev(lint(S({ files: withHead, changed: [...withHead.keys()] })), 2)).toBe('hard');
+    // 中英两侧的互链头**都**写错，断言两条都是 hard —— 只测英文那侧会漏掉一半
+    const withHead = new Map([['docs/a.md', '错的头'], ['docs/a.zh-CN.md', '也是错的头\n\n中文正文。']]);
+    const f2 = lint(S({ files: withHead, changed: [...withHead.keys()] }));
+    expect(f2.filter((x) => x.rule === 2)).toHaveLength(2);
+    expect(sevs(f2, 2)).toEqual(['hard']);
     const pay = new Map([['docs/a.md', '正文'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。']]);
     expect(sev(lint(S({ files: pay, changed: [...pay.keys()], payload: ['docs/a.md'] })), 3)).toBe('hard');
     const img = new Map([
@@ -409,8 +423,14 @@ describe('疤 · 严重度不许悄悄改（评审实测这类变异全存活）
     expect(sev(lint(S({ base: { behind: 1, fetchFailed: false } })), 6)).toBe('warn');
     const on = new Map([['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文。']]);
     expect(sev(lint(S({ files: on, changed: [...on.keys()], onMain: new Set(['docs/a.md']) })), 7)).toBe('warn');
-    const rev = new Map([['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\n这份英文版全是中文。'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文。']]);
-    expect(sev(lint(S({ files: rev, changed: [...rev.keys()] })), 5)).toBe('warn');
+    // 两个方向都翻反，断言两条都是 warn
+    const rev = new Map([
+      ['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\n这份英文版全是中文。'],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\nThis is all English.'],
+    ]);
+    const f5 = lint(S({ files: rev, changed: [...rev.keys()] }));
+    expect(f5.filter((x) => x.rule === 5)).toHaveLength(2);
+    expect(sevs(f5, 5)).toEqual(['warn']);
     expect(sev(lint(S({ files: on, changed: [...on.keys()], body: '## 目的地' })), 8)).toBe('warn');
   });
 });
@@ -435,5 +455,42 @@ describe('疤 · 2026-07-30「.payload 豁免面被悄悄放宽」（我引入�
 
   it('别的文件名不误命中', () => {
     expect(lint(S(['docs/other.md'])).some((f) => f.rule === 2)).toBe(true);
+  });
+});
+
+describe('疤 · cjkRatio 必须先剥代码（strip.ts 头注释点名的危害，此前零测试）', () => {
+  // 病历：第二轮评审实测，同一篇英文文档（代码块里是中文注释）
+  // 剥代码 0.077 vs 不剥 0.732，阈值 0.3 —— 不剥就是必然的规则 5 误报。
+  // 变异「cjkRatio 不剥代码」在全量套件下存活，因为没人直接测这个组合。
+  const doc = [
+    'All of the prose in this document is written in English.',
+    '',
+    '```ts',
+    '// 这里全是中文注释，而且很长很长，占比足以把英文版判成翻反了',
+    'const 变量名 = "中文字符串";',
+    '// 再来一行中文注释，让代码块里的中日韩字符压过正文',
+    '```',
+  ].join('\n');
+
+  it('代码块里的中文不算进占比', () => {
+    expect(cjkRatio(doc)).toBeLessThan(0.3);
+  });
+
+  it('不剥的话会翻过阈值 —— 这就是为什么必须剥（把差距钉住）', () => {
+    const withCode = (doc.match(/[一-鿿]/g)?.length ?? 0) / doc.replace(/[\s\d\p{P}\p{S}]/gu, '').length;
+    expect(withCode).toBeGreaterThan(0.3);   // 不剥 → 误报
+    expect(cjkRatio(doc)).toBeLessThan(0.3); // 剥了 → 不误报
+  });
+
+  it('接到规则 5 上：这样一篇英文文档不许被判成翻反', () => {
+    const files = new Map([
+      ['docs/a.md', `**English** · [中文](a.zh-CN.md)\n\n${doc}`],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n这里全是中文正文。'],
+    ]);
+    const s: Snapshot = {
+      files, changed: [...files.keys()], assets: new Set(), payload: [],
+      onMain: new Set(), base: { behind: 0, fetchFailed: false },
+    };
+    expect(lint(s).some((f) => f.rule === 5)).toBe(false);
   });
 });
