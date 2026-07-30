@@ -65,11 +65,34 @@ export function cjkRatio(md: string): number {
 export function assetRefs(md: string): string[] {
   const prose = stripCode(md);
   const out = new Set<string>();
-  // markdown 链接/图片语法
-  for (const m of prose.matchAll(/\]\((assets\/[^)\s]+)\)/g)) out.add(m[1]!);
+  // markdown 链接/图片语法。用 `[^)]+` 而不是 `[^)\s]+` —— 后者让
+  // **文件名带空格的断图静默漏报**（老脚本用 `[^)]+`，能报；第一轮评审实测）。
+  // 代价是要自己剥掉 title（`![x](assets/a.png "说明")`）和锚点。
+  for (const m of prose.matchAll(/\]\((assets\/[^)]+)\)/g)) out.add(cleanRef(m[1]!));
+  // 引用式链接定义：`[p]: assets/a.png`
+  for (const m of prose.matchAll(/^\s{0,3}\[[^\]]+\]:\s*(\S+)/gm)) {
+    const r = cleanRef(m[1]!);
+    if (r.startsWith('assets/')) out.add(r);
+  }
   // HTML <img src>（**刻意改进**：老脚本只认 markdown 语法，SPEC §5.2 记为改进 #4）
-  for (const m of prose.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']?(assets\/[^"'\s>]+)/gi)) out.add(m[1]!);
+  for (const m of prose.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']?(assets\/[^"'\s>]+)/gi)) out.add(cleanRef(m[1]!));
   return [...out];
+}
+
+/**
+ * 收拾一个引用：剥掉 title、锚点、解 URL 转义。
+ *
+ * `%20` 要解开 —— 老脚本和新版都曾把 `assets/site%20plan.png` 当成一个
+ * 与磁盘上 `site plan.png` 不同的名字，于是误报断图，而 GitHub 渲染是正常的（评审实测）。
+ */
+function cleanRef(ref: string): string {
+  let r = ref.trim().replace(/\s+["'].*$/, '').replace(/#.*$/, '').trim();
+  try {
+    r = decodeURIComponent(r);
+  } catch {
+    /* 不是合法转义就按原样 */
+  }
+  return r;
 }
 
 /** changed 列表 → slug 列表（剥掉 .md / .zh-CN.md 后去重）。 */
@@ -77,8 +100,18 @@ export function slugsOf(changed: string[]): string[] {
   return [...new Set(changed.map((f) => f.replace(/\.zh-CN\.md$/, '').replace(/\.md$/, '')))].sort();
 }
 
-const isPayload = (snap: Snapshot, en: string): boolean =>
-  snap.payload.some((line) => line.trim() === en || line.trim() === en.replace(/^docs\//, ''));
+/**
+ * `.payload` 是否登记了这个文件。
+ *
+ * 老脚本用 `grep -qxF "$EN"`：**整行、逐字节、必须带 `docs/` 前缀**。
+ * 我上一版额外接受了「剥掉 docs/ 前缀」和 trim 后的写法 —— 那是**放宽豁免面**，
+ * 方向是「老的拦、新的放」，对闸门来说是危险的那一侧，而且没登记进刻意改进表
+ * （第一轮评审抓到）。收回成与老脚本一致。
+ *
+ * 注意 `snapshot.ts` 采 payload 时对每行做了 trim（去掉行尾换行），
+ * 所以这里比的是 trim 之后的整行 —— 与 `grep -qxF` 对齐（它也不含行尾换行）。
+ */
+const isPayload = (snap: Snapshot, en: string): boolean => snap.payload.includes(en);
 
 export function lint(snap: Snapshot): Finding[] {
   const out: Finding[] = [];

@@ -1,6 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { lint, hasHard, type Snapshot } from '../src/lint.js';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { assetRefs, lint, hasHard, type Snapshot } from '../src/lint.js';
 import { stripCode } from '../src/strip.js';
+import { collect } from '../src/snapshot.js';
+
+/** 造一个带 origin 的小仓，用于采料层那几条疤（它们只能在真 git 上复现）。 */
+function repo() {
+  const dir = mkdtempSync(join(tmpdir(), 'zhupi-scar-'));
+  const origin = join(dir, 'o.git');
+  const wt = join(dir, 'wt');
+  const run = (cwd: string, ...a: string[]) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  run(dir, 'init', '--bare', '-q', origin);
+  run(dir, 'clone', '-q', origin, wt);
+  for (const [k, v] of [['user.email', 't@t'], ['user.name', 'T'], ['commit.gpgsign', 'false']]) run(wt, 'config', k, v);
+  mkdirSync(join(wt, 'docs'), { recursive: true });
+  writeFileSync(join(wt, 'docs', 'seed.md'), 'seed\n');
+  run(wt, 'add', '.');
+  run(wt, 'commit', '-qm', 'main');
+  run(wt, 'branch', '-M', 'main');
+  run(wt, 'push', '-q', '-u', 'origin', 'main');
+  run(wt, 'checkout', '-qb', 'folder');
+  return { dir, wt, g: (...a: string[]) => run(wt, ...a) };
+}
+
+const w = (wt: string, rel: string, content: string) => {
+  mkdirSync(dirname(join(wt, rel)), { recursive: true });
+  writeFileSync(join(wt, rel), content);
+};
 
 // ══ 疤痕清单 —— Phase 2 的上线闸门（design §3，D7 已定）══
 //
@@ -261,5 +290,150 @@ describe('疤 · 2026-07-30「规则 5 与 `.payload` 例外相撞」（实现�
   it('待发正文的中文版照查语言方向', () => {
     const files = new Map([['docs/a.md', zhPayload], ['docs/a.zh-CN.md', `[English](a.md) · **中文**\n\nAll English here.\n\n不要从本页复制`]]);
     expect(lint(snap({ files, payload: ['docs/a.md'] })).some((x) => x.rule === 5)).toBe(true);
+  });
+});
+
+// ══ 以下四条是 2026-07-30 第一轮实现评审抓到的**我自己引入的回归** ══
+// 疤痕清单原本只 import lint 和 stripCode，结构上碰不到采料层 ——
+// 而评审实测 snapshot.ts 的 7 个变异体 100% 存活，三条高危全在那一层。
+// 所以下面这组要真造 git 仓。
+
+describe('疤 · 2026-07-30「中文名文件全挂」（我引入的回归）', () => {
+  // 病历：`git ls-tree` / `git diff` 默认把非 ASCII 路径转义成八进制加引号
+  // （core.quotePath 默认 on）。不关掉的话 assets 集合里是转义串、正文引用是真名，
+  // 永远对不上 → 中文名的图一律误报断图（硬伤，好折被拦死且改不掉）；
+  // changed 里的路径也带引号 → git show 必失败 → 双语齐的也报缺译本。
+  // 实测：奏折仓 #31 那折 22 个中文名文档全部踩在上面。
+  it('中文名的图真在仓里 → 不许报断图；中文名双语对 → 不许报缺译本', () => {
+    const { dir, wt, g } = repo();
+    try {
+      w(wt, 'docs/立面.md', '**English** · [中文](立面.zh-CN.md)\n\nEnglish prose.\n\n![图](assets/立面图.png)\n');
+      w(wt, 'docs/立面.zh-CN.md', '[English](立面.md) · **中文**\n\n中文正文。\n');
+      w(wt, 'docs/assets/立面图.png', 'png');
+      g('add', '-A'); g('commit', '-qm', 'cn');
+      expect(lint(collect({ worktree: wt, skipFetch: true }))).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('疤 · 2026-07-30「大文档被当不存在」（我引入的回归）', () => {
+  // 病历：execFileSync 默认 maxBuffer 1 MiB，超了抛 ENOBUFS 被 catch 吞成 null，
+  // 等价于「文件不存在」。后果是双向都错：谎报缺译本，同时因为 files.get 为空
+  // 让规则 4 整条不跑 → 真断图漏报。静默降级，不会有人发现。
+  it('1 MiB 以上的文档照样读得到，规则 4 照样跑', () => {
+    const { dir, wt, g } = repo();
+    try {
+      const big = `${'x'.repeat(1_200_000)}\n\n![p](assets/gone.png)\n`;
+      w(wt, 'docs/big.md', `**English** · [中文](big.zh-CN.md)\n\n${big}`);
+      w(wt, 'docs/big.zh-CN.md', '[English](big.md) · **中文**\n\n中文正文。\n');
+      g('add', '-A'); g('commit', '-qm', 'big');
+      const f = lint(collect({ worktree: wt, skipFetch: true }));
+      expect(f.some((x) => x.rule === 1)).toBe(false);            // 不谎报缺译本
+      expect(f.some((x) => x.rule === 4 && x.subject === 'assets/gone.png')).toBe(true); // 真断图照报
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('疤 · 2026-07-30「行首反引号开出假围栏」（我引入的回归）', () => {
+  // 病历：strip 的围栏识别只看行首 `^\s{0,3}(`{3,})`，不判断那是不是行内 code。
+  // 正文写 "```md``` is the info string form." 会开出一个假围栏，
+  // 把**整篇剩下的内容**当代码剥掉 → 真断图漏报，而那正是「他读到断图」那条疤本身。
+  it('行内 code 形状的 ``` 不开围栏，后面的真断图照报', () => {
+    const md = '**English** · [中文](a.zh-CN.md)\n\n```md``` is the info string form.\n\n![real](assets/gone.png)\n';
+    expect(stripCode(md)).toContain('assets/gone.png');
+  });
+
+  it('真围栏照旧剥（不能因为收紧判据就整条失效）', () => {
+    expect(stripCode('前\n```md\n![x](assets/e.png)\n```\n后')).not.toContain('assets/e.png');
+  });
+
+  it('带 info string 的真围栏也要剥', () => {
+    expect(stripCode('前\n```ts\nconst 中文 = 1;\n```\n后').includes('中文')).toBe(false);
+  });
+});
+
+describe('疤 · 2026-07-30「带空格文件名的断图漏报」（我引入的回归）', () => {
+  // 病历：assetRefs 用 `[^)\s]+`，带空格的路径整条匹配不上（老脚本用 `[^)]+`，能报）。
+  const base = (body: string) => `**English** · [中文](a.zh-CN.md)\n\n${body}`;
+
+  it('文件名带空格的断图要报', () => {
+    expect(assetRefs(base('![p](assets/plan b.png)'))).toContain('assets/plan b.png');
+  });
+
+  it('title 要剥掉，不能连进路径', () => {
+    expect(assetRefs(base('![p](assets/a.png "站位图")'))).toEqual(['assets/a.png']);
+  });
+
+  it('URL 转义要解开 —— GitHub 渲染正常的路径不许被判成断图', () => {
+    expect(assetRefs(base('![p](assets/site%20plan.png)'))).toEqual(['assets/site plan.png']);
+  });
+
+  it('引用式链接定义也算引用', () => {
+    expect(assetRefs(base('![p][k]\n\n[k]: assets/ref.png'))).toContain('assets/ref.png');
+  });
+
+  it('锚点要剥掉', () => {
+    expect(assetRefs(base('![p](assets/a.png#frag)'))).toEqual(['assets/a.png']);
+  });
+});
+
+describe('疤 · 严重度不许悄悄改（评审实测这类变异全存活）', () => {
+  // 病历：第一轮评审做了 34 个变异，疤痕清单只杀 12 个。存活的包括
+  // 「规则 1 硬伤降成警告」和「规则 7 警告升成硬伤」—— 后者直接违反
+  // 「拦太死把人逼向绕过」那条疤。严重度是判据的一半，必须逐条钉住。
+  const S = (over: Partial<Snapshot> = {}): Snapshot => ({
+    files: new Map(), changed: [], assets: new Set(), payload: [], onMain: new Set(),
+    base: { behind: 0, fetchFailed: false }, ...over,
+  });
+  const sev = (f: ReturnType<typeof lint>, rule: number) => f.find((x) => x.rule === rule)?.severity;
+
+  it('硬伤那四条必须是 hard', () => {
+    expect(sev(lint(S({ files: new Map([['docs/a.md', 'x']]), changed: ['docs/a.md'] })), 1)).toBe('hard');
+    const withHead = new Map([['docs/a.md', '错的头'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。']]);
+    expect(sev(lint(S({ files: withHead, changed: [...withHead.keys()] })), 2)).toBe('hard');
+    const pay = new Map([['docs/a.md', '正文'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。']]);
+    expect(sev(lint(S({ files: pay, changed: [...pay.keys()], payload: ['docs/a.md'] })), 3)).toBe('hard');
+    const img = new Map([
+      ['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.\n\n![x](assets/g.png)'],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。'],
+    ]);
+    expect(sev(lint(S({ files: img, changed: [...img.keys()] })), 4)).toBe('hard');
+  });
+
+  it('警告那五条必须是 warn —— 升成硬伤就是重犯 pre-push 那次的错', () => {
+    expect(sev(lint(S({ base: { behind: 1, fetchFailed: true } })), 9)).toBe('warn');
+    expect(sev(lint(S({ base: { behind: 1, fetchFailed: false } })), 6)).toBe('warn');
+    const on = new Map([['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文。']]);
+    expect(sev(lint(S({ files: on, changed: [...on.keys()], onMain: new Set(['docs/a.md']) })), 7)).toBe('warn');
+    const rev = new Map([['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\n这份英文版全是中文。'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文。']]);
+    expect(sev(lint(S({ files: rev, changed: [...rev.keys()] })), 5)).toBe('warn');
+    expect(sev(lint(S({ files: on, changed: [...on.keys()], body: '## 目的地' })), 8)).toBe('warn');
+  });
+});
+
+describe('疤 · 2026-07-30「.payload 豁免面被悄悄放宽」（我引入的回归）', () => {
+  // 病历：老脚本是 `grep -qxF "$EN"` —— 整行、逐字节、必须带 docs/ 前缀。
+  // 我上一版额外接受「剥掉 docs/ 前缀」，那是放宽豁免面 → 规则 2 这条硬伤被更多文件跳过。
+  // 方向是「老的拦、新的放」，对闸门来说是危险的那一侧，而且没登记进刻意改进表。
+  const S = (payload: string[]): Snapshot => ({
+    files: new Map([['docs/a.md', '待发正文。'], ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文。\n\n不要从本页复制']]),
+    changed: ['docs/a.md', 'docs/a.zh-CN.md'],
+    assets: new Set(), payload, onMain: new Set(), base: { behind: 0, fetchFailed: false },
+  });
+
+  it('带 docs/ 前缀的整行 → 豁免生效', () => {
+    expect(lint(S(['docs/a.md']))).toEqual([]);
+  });
+
+  it('**不带 docs/ 前缀 → 不豁免**（与老脚本一致）', () => {
+    expect(lint(S(['a.md'])).some((f) => f.rule === 2)).toBe(true);
+  });
+
+  it('别的文件名不误命中', () => {
+    expect(lint(S(['docs/other.md'])).some((f) => f.rule === 2)).toBe(true);
   });
 });
