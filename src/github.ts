@@ -19,6 +19,7 @@ const run = promisify(execFile);
 
 let cachedToken: string | null = null;
 let cachedClient: Octokit | null = null;
+let cachedWriteClient: Octokit | null = null;
 
 export async function authToken(force = false): Promise<string> {
   if (!force && cachedToken) return cachedToken;
@@ -53,16 +54,77 @@ export function installReadOnlyGate(oc: Octokit): Octokit {
   return oc;
 }
 
+// —— 写入侧（Phase 3）——
+//
+// R7 从「绝对只读」精确成「不写远端」是 Phase 1 的事；Phase 3 第一次真往远端写。
+// **只读闸门不拆**：读实例照旧一个非 GET 都发不出去。写走一个**独立实例**，
+// 挂一道更严的闸 —— 白名单里逐字对得上的 route 模板才放行，其余（含 GET）一律拒。
+//
+// 为什么比对 route **模板**而不是展开后的 URL：hook 拿到的 options.url 就是模板
+// （实测 `POST /repos/{owner}/{repo}/pulls`，占位符还没展开），而模板是我们自己代码里的
+// 字面量常量，调用方塞不进去。展开后的 URL 反而带真实参数，比对要写正则，
+// 而正则是这个项目反复栽跟头的地方。
+//
+// 逐字匹配顺带挡住一个真实的逃逸：Octokit 的 `{+param}` **不做 URL 编码**
+// （实测 `{+repo}` 传 `r/pulls/1/merge` 会原样拼进路径，逃到 merge 端点；
+// 普通 `{repo}` 会编码成 `r%2Fpulls%2F1%2Fmerge`）。`{+repo}` 的模板与白名单里的
+// `{repo}` 逐字不等 → 直接被拒。这是 fail-closed 的方向。
+export const WRITE_ALLOWED: readonly string[] = [
+  'POST /repos/{owner}/{repo}/pulls',
+  'PATCH /repos/{owner}/{repo}/pulls/{pull_number}',
+  'POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies',
+];
+
+/**
+ * 写实例的闸门：白名单外一律拒，**GET 也拒**。
+ *
+ * 拒 GET 是刻意的：读有 get()，它带分页护栏和 404 消歧。让写实例也能读，
+ * 等于开出第二条没有护栏的读路径 —— 而「同一件事两个实现」正是这个项目反复反对的。
+ *
+ * 导出是为了可测：测试会起本地 server 验证白名单外的东西真的发不出去。
+ */
+export function installWriteGate(oc: Octokit, allow: readonly string[] = WRITE_ALLOWED): Octokit {
+  const set = new Set(allow);
+  oc.hook.wrap('request', async (request, options) => {
+    const method = String(options.method ?? '').toUpperCase();
+    const url = String(options.url ?? '');
+    if (!set.has(`${method} ${url}`)) {
+      throw new Error(`zhupi-mcp 的写入白名单里没有这一条，拦下了：${method} ${url}`);
+    }
+    return request(options);
+  });
+  return oc;
+}
+
+/**
+ * 测试接缝。第二轮评审的唯一高危是「get() 零覆盖」—— 六条关键行为只活在那个函数里，
+ * 而测试把它整个 mock 掉了。没有这个接缝，get()/write() 只能对着真 github.com 测，
+ * 也就是压根测不了；写入侧再重复一遍那个错误，代价比读侧高得多。
+ * 与 snapshot.ts 的 ZHUPI_GIT_MAXBUFFER 同一个理由：不开接缝的测试是恒绿的。
+ */
+const baseUrlOpt = (): { baseUrl?: string } => {
+  const b = process.env.ZHUPI_GITHUB_BASEURL;
+  return b ? { baseUrl: b } : {};
+};
+
 /** 实例绝不导出——外面拿不到它，就没法绕开上面那道 hook。 */
 async function client(force = false): Promise<Octokit> {
   if (!force && cachedClient) return cachedClient;
-  cachedClient = installReadOnlyGate(new Octokit({ auth: await authToken(force) }));
+  cachedClient = installReadOnlyGate(new Octokit({ auth: await authToken(force), ...baseUrlOpt() }));
   return cachedClient;
+}
+
+/** 写实例与读实例**分开缓存**：混用一个实例就只能挂一道闸，两边必然有一边被放松。 */
+async function writeClient(force = false): Promise<Octokit> {
+  if (!force && cachedWriteClient) return cachedWriteClient;
+  cachedWriteClient = installWriteGate(new Octokit({ auth: await authToken(force), ...baseUrlOpt() }));
+  return cachedWriteClient;
 }
 
 export function resetAuthCache(): void {
   cachedToken = null;
   cachedClient = null;
+  cachedWriteClient = null;
 }
 
 /** 这些 key 会覆盖 Octokit 解析出来的动词与地址，一律不许调用方传。 */
@@ -169,6 +231,48 @@ export async function get<T = unknown>(
     } catch (e) {
       // 自己抛的分类错误直接放行——v1 在这里把它重新包成「没预料到的问题」，
       // 结果全新装机最常见的失败路径（gh 没装/没登录）返回的是一句废话（评审实证）。
+      if (isFailure(e)) throw e;
+      if (statusOf(e) === 401 && attempt === 0) {
+        resetAuthCache();
+        continue;
+      }
+      return fail(classify(e, { notFound: opts.notFound }));
+    }
+  }
+  return fail({ kind: 'auth', why: 'expired' });
+}
+
+export interface WriteOptions {
+  /** 404 时归为什么。不给则默认「仓读不到」。 */
+  notFound?: ZhupiError;
+}
+
+/**
+ * 写远端。**只有 WRITE_ALLOWED 里的三条路由走得通。**
+ *
+ * 两道闸门都要过：这里的字面量检查（给一句能照着修的话）+ hook 里的实例级检查
+ * （绕不过去的那道）。前者可以被改坏，后者不行 —— 所以后者才是执行机制，
+ * 前者只是把错误信息说人话。
+ *
+ * **只重试 401，不重试网络错误。** 401 是服务端明确拒绝、没有副作用，重试安全；
+ * 而网络中断时请求可能已经到了 GitHub —— 重试一个 POST /pulls 就是开出第二折。
+ * get() 那边重试网络错误是无害的，这一侧不是，别照抄。
+ */
+export async function write<T = unknown>(
+  route: string,
+  params: Record<string, unknown>,
+  opts: WriteOptions = {},
+): Promise<T> {
+  if (!WRITE_ALLOWED.includes(route)) {
+    return fail({ kind: 'badInput', what: `route 不在写入白名单里：${route}` });
+  }
+  const safe = sanitizeParams(params);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const oc = await writeClient(attempt > 0);
+      const res = await oc.request(route, safe);
+      return res.data as T;
+    } catch (e) {
       if (isFailure(e)) throw e;
       if (statusOf(e) === 401 && attempt === 0) {
         resetAuthCache();
