@@ -5,7 +5,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { reviewRepo } from './config.js';
-import { readAll, readFolder, summarize } from './folders.js';
+import { conversationIds, readAll, readFolder, summarize } from './folders.js';
+import { load, mark, save, storePath } from './processed.js';
 import { ZhupiFailure, messageFor } from './errors.js';
 
 const STATE_VALUES = ['open', 'merged'] as const;
@@ -16,13 +17,11 @@ const TOOLS = [
     name: 'list_folders',
     description:
       '列出奏折仓里的折（PR），按最近活动倒序，带计数与「要看一眼」的正文预览。\n' +
-      '· counts.needsReply —— 确定要回：他发的、一条回话都没有的 inline 批注\n' +
-      '· counts.unclear —— **判不了**：agent 与用户共用同一个 GitHub 账号，API 分不出作者。' +
+      '· counts.needsReply —— **确定要处理**：他发的没有回话的 inline 批注，加上没标记过已处理的总批\n' +
+      '· counts.unclear —— **判不了**：只剩 inline 那一类（他可能从 GitHub 网页在串里回过话，与 agent 同形）。' +
       '看 attention 里的 preview 自己判，别当成 0 就跳过\n' +
-      '· counts.hasFollowUp —— 后面还有别的总批。**不代表已回**（他连发两条时第一条也在这）\n' +
       '· attention[] —— 每条待看的正文前 80 字 + 时间，够直接判断要不要处理\n' +
-      '注意：agent 与用户共用同一个 GitHub 账号，所以「谁说的」只在他走朱批台时才确定。' +
-      '他从 GitHub 网页/手机批注或回话时与 agent 同形，一律进 unclear + attention，**不要因为 needsReply=0 就说没事**。' +
+      '总批的已处理状态记在本地（agent 私有），处理完请调 mark_handled 记一笔，否则它会一直挂着。' +
       '坏折返回 { ok: false, error }，没有 counts。',
     inputSchema: {
       type: 'object',
@@ -38,8 +37,8 @@ const TOOLS = [
       '把一折的批注读成结构化 JSON。**要读某一折就传 pr**——不传会扫全部 open 折，体积大一个量级。\n' +
       '· inline —— 还原好的批注串：根批注 + replies（每条带 fromDesk 标明是他说的还是我方回的），' +
       '含引文 quote、行号 line、是否 outdated\n' +
-      '· conversation —— 会话区总批，answered 只有 inferred / unknown 两值，**永远不会是 true**；' +
-      'fromDesk=true 的那些是 zhupi 因为锚不到行而并入总批的朱批，**确定是他写的**\n' +
+      '· conversation —— 会话区总批。`answered` 是 handled / pending 两值，**取自本地已处理记录，不是推断**；' +
+      'fromDesk=true 的是 zhupi 因为锚不到行而并入总批的朱批\n' +
       '· inline[].answered —— 只在 fromDesk=true 时有意义；fromDesk=false 表示这条根批注' +
       '不是从朱批台来的（可能是他从 GitHub 网页发的，也可能是 agent 自己发的），此时看 attention\n' +
       '· counts / attention —— 与 list_folders 同名同义',
@@ -48,6 +47,26 @@ const TOOLS = [
       properties: {
         pr: { type: 'integer', minimum: 1, description: '折号。强烈建议传——不传等于全量拉取' },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'mark_handled',
+    description:
+      '把某折的总批标记成「已处理」。**写的是 agent 本地记录，不碰 GitHub。**\n' +
+      '为什么要有它：agent 与用户共用同一个 GitHub 账号，任何写进 GitHub 的标记都会退化成靠约定；' +
+      '而「这条我处理过了」只有 agent 知道，放本地就与账号共用无关了。\n' +
+      '什么时候调：读完总批、改完文档、在聊天里回过他之后，把处理过的 conversation id 记一笔。' +
+      '**不记它就会一直挂在 needsReply 里。**\n' +
+      '`seed: true` = 把该折当前全部总批一次记成已处理（清历史积压用，慎用：会连没读的一起标掉）。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pr: { type: 'integer', minimum: 1, description: '折号' },
+        ids: { type: 'array', items: { type: 'integer' }, description: '要标记的 conversation id' },
+        seed: { type: 'boolean', description: '把该折当前全部总批标成已处理（清积压）' },
+      },
+      required: ['pr'],
       additionalProperties: false,
     },
   },
@@ -106,6 +125,24 @@ export async function handleTool(name: string, args: Record<string, unknown>): P
     const pr = parsePr(args.pr);
     const folders = pr === undefined ? await readAll('open', ref) : [await readFolder(pr, ref)];
     return { repo: ref.slug, folders };
+  }
+  if (name === 'mark_handled') {
+    rejectUnknownKeys('mark_handled', args, ['pr', 'ids', 'seed']);
+    const pr = parsePr(args.pr);
+    if (pr === undefined) throw new ZhupiFailure({ kind: 'badInput', what: 'mark_handled 必须给 pr' });
+    let ids: number[];
+    if (args.seed === true) {
+      ids = await conversationIds(pr, ref);
+    } else {
+      if (!Array.isArray(args.ids) || args.ids.length === 0) {
+        throw new ZhupiFailure({ kind: 'badInput', what: 'mark_handled 要给 ids（或 seed: true）' });
+      }
+      ids = args.ids.filter((x): x is number => typeof x === 'number');
+    }
+    const { store, added } = mark(load(), pr, ids);
+    if (added.length > 0) save(store);
+    // 如实汇报「真正新增了几条」，不谎报「记了 3 条」——重复标记时 added 为空。
+    return { repo: ref.slug, pr, added, alreadyHandled: ids.length - added.length, stateFile: storePath() };
   }
   throw new ZhupiFailure({ kind: 'badInput', what: `没有叫 ${name} 的工具` });
 }

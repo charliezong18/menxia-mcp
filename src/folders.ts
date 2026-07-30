@@ -6,6 +6,7 @@
 import { reviewRepo, type RepoRef } from './config.js';
 import { get, repoReadable } from './github.js';
 import { fail, redact } from './errors.js';
+import { idsFor, load, type ProcessedStore } from './processed.js';
 import {
   attentionOf,
   buildInlineThreads,
@@ -87,10 +88,10 @@ async function getPull(ref: RepoRef, pr: number): Promise<RawPull> {
 }
 
 export async function readFolder(pr: number, ref: RepoRef = reviewRepo()): Promise<FolderDetail> {
-  return hydrate(ref, await getPull(ref, pr));
+  return hydrate(ref, await getPull(ref, pr), load());
 }
 
-async function hydrate(ref: RepoRef, pull: RawPull): Promise<FolderDetail> {
+async function hydrate(ref: RepoRef, pull: RawPull, store: ProcessedStore): Promise<FolderDetail> {
   const base = { owner: ref.owner, repo: ref.repo, per_page: PER_PAGE };
   const guard = { kind: 'tooManyComments' as const, repo: ref.slug, pr: pull.number };
   const nf = { kind: 'notFound' as const, repo: ref.slug, pr: pull.number };
@@ -117,7 +118,8 @@ async function hydrate(ref: RepoRef, pull: RawPull): Promise<FolderDetail> {
 
   const inline = buildInlineThreads(comments, reviews, pull.head.sha);
   // 把 zhupi 降级塞进 review body 的朱批一并捞出来——否则那批话在输出里根本不存在。
-  const conversation = classifyConversation(issueComments, deskFallbackNotes(reviews));
+  // 第三个参数是本地「已处理」记录：总批的 answered 不再靠位置推断（review#29）。
+  const conversation = classifyConversation(issueComments, deskFallbackNotes(reviews), idsFor(store, pull.number));
   return {
     ok: true,
     number: pull.number,
@@ -143,7 +145,8 @@ export async function readAll(
   ref: RepoRef = reviewRepo(),
 ): Promise<Array<FolderDetail | FolderError>> {
   const pulls = await listPulls(ref, state);
-  const settled = await Promise.allSettled(pulls.map((p) => hydrate(ref, p)));
+  const store = load();
+  const settled = await Promise.allSettled(pulls.map((p) => hydrate(ref, p, store)));
   const out = settled.map((r, i): FolderDetail | FolderError => {
     if (r.status === 'fulfilled') return r.value;
     const p = pulls[i]!;
@@ -183,3 +186,9 @@ export const summarize = (d: FolderDetail | FolderError): FolderSummary | Folder
         counts: d.counts,
         attention: d.attention,
       };
+
+/** 某折当前全部会话区 comment id —— 灌水位用（一次清空积压）。 */
+export async function conversationIds(pr: number, ref: RepoRef = reviewRepo()): Promise<number[]> {
+  const d = await readFolder(pr, ref);
+  return d.conversation.map((c) => c.id);
+}

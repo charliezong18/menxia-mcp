@@ -11,7 +11,7 @@ The rollout order lives in [SPEC §8](SPEC.md). This file adds the thing the spe
 | Phase | Exit criteria (falsifiable) | Status |
 |---|---|---|
 | **0 · Route guard** | 21/21 in `guard-pr-create.test.sh`; both paths observed live (a blocked call actually refused, a legitimate call actually passed); SKILL.md and SPEC §7 agree with the code | **✅ 2026-07-28** |
-| **1 · Read-only tools** | `read_comments` returns the real annotations on a real folder with `answered` correct against a hand count; `list_folders` unanswered counts match | not started |
+| **1 · Read-only tools** ✅ | `read_comments` returns the real annotations on a real folder with `answered` correct against a hand count; `list_folders` unanswered counts match | **✅ 2026-07-29** |
 | **2 · lint_folder** | Differential test over every open folder plus one must-fail sample per rule; new and old outputs align line by line, every difference either fixed or documented in SPEC §5.2 | not started |
 | **3 · Write tools** | One folder opened end to end through `open_folder`; two concurrent sessions provably do not collide (flock observed, not assumed); the backlink marker read back from the live PR body | not started |
 | **4 · Retirement** | With all four bash scripts deleted, one full round completes: open → read → reply; SKILL.md reduced to glossary + tool pointers; hook message points at the MCP tool; the SPEC §5.3 #6 documentation debt paid | not started |
@@ -30,4 +30,6 @@ Appended per phase. Never rewritten.
 
 zhupi's own ledger stalled for 7 commits with an indicator tripped the entire time. The retro's conclusion is worth copying verbatim: **the lesson isn't "we forgot," it's that booking had no trigger** — feature commits and measurement commits were separate, held together by nothing but good intentions.
 
-**Right now this file has no trigger either**, and that is a known debt, not an oversight. It is tolerable only because one phase is done and the table is short. When Phase 1 lands code, the trigger goes in with it: the test runner prints the phase table's status line, so every run forces the number into view. Until then, treat an unchanged "not started" as unverified rather than accurate.
+**The trigger was installed alongside Phase 1 on 2026-07-29** (`npm test` ends by running `scripts/print-milestones.mjs`, which parses this file's status rows and prints them — parsed, never hardcoded, since hardcoding would just create a second copy that drifts). That debt is paid.
+
+One thing still holds: **treat an unchanged "not started" as unverified rather than accurate.** The trigger guarantees you see this table on every test run; it does not guarantee the table is right.

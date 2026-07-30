@@ -9,6 +9,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { rmSync } from 'node:fs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failed = 0;
@@ -27,10 +29,15 @@ const call = async (client, tool, args = {}) => {
 };
 
 const main = async () => {
+  // **必须显式传 env**：StdioClientTransport 默认只透一小部分安全变量，
+  // 不传的话 server 会写到家目录的真实状态文件里——第一次跑就污染了我的真数据（实测）。
+  const stateFile = join(tmpdir(), `zhupi-acceptance-${process.pid}.json`);
+  rmSync(stateFile, { force: true });
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [join(root, 'dist', 'index.js')],
     stderr: 'pipe',
+    env: { ...process.env, ZHUPI_STATE_FILE: stateFile },
   });
   const client = new Client({ name: 'zhupi-mcp-acceptance', version: '0.1.0' }, { capabilities: {} });
   await client.connect(transport);
@@ -38,8 +45,9 @@ const main = async () => {
   console.log('\n── R1 · 服务能挂上 ──');
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  check('tools/list 列出两个工具', names.join(',') === 'list_folders,read_comments', `实得 ${names.join(',')}`);
-  check('两个工具都有 inputSchema', tools.every((t) => t.inputSchema?.type === 'object'));
+  check('tools/list 列出三个工具', names.join(',') === 'list_folders,mark_handled,read_comments', `实得 ${names.join(',')}`);
+  check('每个工具都有 inputSchema', tools.every((t) => t.inputSchema?.type === 'object'));
+  check('状态文件被隔离到临时路径（不碰真实数据）', stateFile.startsWith(tmpdir()), stateFile);
 
   console.log('\n── R3/R4 · read_comments(17)：inline 的 ground truth ──');
   const r17 = await call(client, 'read_comments', { pr: 17 });
@@ -62,23 +70,39 @@ const main = async () => {
     f17?.inline?.every((t) => t.quote.length > 0 && !/^[+-]/.test(t.quote)),
     `实得 ${JSON.stringify(f17?.inline?.map((t) => t.quote.slice(0, 20)))}`);
 
-  console.log('\n── R4 · read_comments(18)：总批三态 ──');
+  console.log('\n── R4 · 总批的 answered 取自本地记录，不是推断（review#29）──');
   const r18 = await call(client, 'read_comments', { pr: 18 });
   const f18 = r18.folders?.[0];
   check('conversation 恰好 2 条', f18?.conversation?.length === 2, `实得 ${f18?.conversation?.length}`);
-  check('第一条 inferred', f18?.conversation?.[0]?.answered === 'inferred', `实得 ${f18?.conversation?.[0]?.answered}`);
-  check('第二条 unknown', f18?.conversation?.[1]?.answered === 'unknown', `实得 ${f18?.conversation?.[1]?.answered}`);
-  check('永不出现 true/false', f18?.conversation?.every((c) => c.answered === 'inferred' || c.answered === 'unknown'));
-  check('counts.needsReply = 0（判不了的不谎报成待办）', f18?.counts?.needsReply === 0, `实得 ${f18?.counts?.needsReply}`);
-  check('counts.unclear = 1', f18?.counts?.unclear === 1, `实得 ${f18?.counts?.unclear}`);
-  check('attention 带正文预览，够一眼判断', (f18?.attention?.length ?? 0) > 0 && f18.attention[0].preview.length > 0,
-    JSON.stringify(f18?.attention?.[0]));
+  check('answered 只有 handled / pending', f18?.conversation?.every((c) => ['handled', 'pending'].includes(c.answered)),
+    JSON.stringify(f18?.conversation?.map((c) => c.answered)));
+  check('两条都没记过 → 都 pending，且**不会互相清掉**（旧位置推断的漏报洞）',
+    f18?.conversation?.every((c) => c.answered === 'pending'),
+    JSON.stringify(f18?.conversation?.map((c) => c.answered)));
+  check('counts.needsReply = 2（如实报，不靠位置猜）', f18?.counts?.needsReply === 2, `实得 ${f18?.counts?.needsReply}`);
+  check('counts 里已无 hasFollowUp', !('hasFollowUp' in (f18?.counts ?? {})), JSON.stringify(f18?.counts));
+  check('attention 两条都带正文预览', (f18?.attention?.length ?? 0) === 2 && f18.attention.every((a) => a.preview.length > 0),
+    JSON.stringify(f18?.attention?.map((a) => a.preview.slice(0, 18))));
+
+  console.log('\n── mark_handled：本地记录，不碰 GitHub ──');
+  const before = await call(client, 'read_comments', { pr: 18 });
+  const firstId = before.folders[0].conversation[0].id;
+  const marked = await call(client, 'mark_handled', { pr: 18, ids: [firstId] });
+  check('如实汇报新增了 1 条', marked.added?.length === 1 && marked.added[0] === firstId, JSON.stringify(marked));
+  const after = await call(client, 'read_comments', { pr: 18 });
+  check('那条变 handled', after.folders[0].conversation[0].answered === 'handled',
+    JSON.stringify(after.folders[0].conversation.map((c) => c.answered)));
+  check('needsReply 少 1', after.folders[0].counts.needsReply === 1, `实得 ${after.folders[0].counts.needsReply}`);
+  check('attention 少 1 条', after.folders[0].attention.length === 1, `实得 ${after.folders[0].attention.length}`);
+  const again = await call(client, 'mark_handled', { pr: 18, ids: [firstId] });
+  check('重复标记如实报 0 新增（不谎报）', again.added?.length === 0 && again.alreadyHandled === 1, JSON.stringify(again));
 
   console.log('\n── R2 · list_folders ──');
   const open = await call(client, 'list_folders');
   check('open 列表非空', open.folders?.length > 0, `实得 ${open.folders?.length}`);
-  check('每折都带 counts 三字段',
-    open.folders?.every((f) => !f.ok || ['needsReply', 'unclear', 'hasFollowUp'].every((k) => typeof f.counts?.[k] === 'number')));
+  check('每折都带 counts 两字段',
+    open.folders?.every((f) => !f.ok || ['needsReply', 'unclear'].every((k) => typeof f.counts?.[k] === 'number')),
+    JSON.stringify(open.folders?.map((f) => f.counts)));
   check('每折都有判别字段 ok', open.folders?.every((f) => typeof f.ok === 'boolean'));
   check('按最近活动倒序（不是创建时间序）', (() => {
     const t = open.folders.filter((f) => f.ok).map((f) => f.updatedAt);
@@ -124,6 +148,7 @@ const main = async () => {
     badState.content?.[0]?.text);
 
   await client.close();
+  rmSync(stateFile, { force: true });
   console.log(`\n${failed === 0 ? '实机验收全部通过。' : `实机验收有 ${failed} 条未过。`}`);
   process.exit(failed === 0 ? 0 : 1);
 };

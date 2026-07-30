@@ -196,42 +196,7 @@ describe('inline 串还原', () => {
 
   it('空输入不抛异常', () => {
     expect(buildInlineThreads([], [])).toEqual([]);
-    expect(countsOf([], [])).toEqual({ needsReply: 0, unclear: 0, hasFollowUp: 0 });
-  });
-});
-
-describe('总批：三态，永不返回 true/false', () => {
-  it('#18 两条 → 第一条 inferred、第二条 unknown', () => {
-    const conv = classifyConversation(pr18Conv);
-    expect(conv).toHaveLength(2);
-    expect(conv[0]!.answered).toBe('inferred');
-    expect(conv[1]!.answered).toBe('unknown');
-  });
-
-  it('unknown 不计入 unanswered —— 否则最后一条（几乎永远是我方回话）会被谎报成待办', () => {
-    const c = countsOf([], classifyConversation(pr18Conv));
-    expect(c.needsReply).toBe(0);
-    expect(c.unclear).toBe(1);
-    expect(c.hasFollowUp).toBe(1);
-  });
-
-  it('只有一条 → unknown', () => {
-    const conv = classifyConversation([pr18Conv[0]!]);
-    expect(conv[0]!.answered).toBe('unknown');
-  });
-
-  it('任何输入都不会出现 true 或 false', () => {
-    for (const input of [pr18Conv, [pr18Conv[0]!], []]) {
-      for (const c of classifyConversation(input)) {
-        expect(['inferred', 'unknown']).toContain(c.answered);
-      }
-    }
-  });
-
-  it('按时间排序，不依赖数组原顺序', () => {
-    const conv = classifyConversation([...pr18Conv].reverse());
-    expect(conv[0]!.createdAt < conv[1]!.createdAt).toBe(true);
-    expect(conv[1]!.answered).toBe('unknown');
+    expect(countsOf([], [])).toEqual({ needsReply: 0, unclear: 0 });
   });
 });
 
@@ -382,6 +347,60 @@ describe('第三轮评审：他不走朱批台的两条路（明早最可能踩�
     };
     const conv = classifyConversation(pr18Conv, deskFallbackNotes([note]));
     expect(conv[conv.length - 1]!.body).toContain('晚说的');
-    expect(conv[conv.length - 1]!.answered).toBe('unknown');
+    expect(conv[conv.length - 1]!.answered).toBe('pending');
+  });
+});
+
+describe('总批的 answered 改用本地记录（review#29）', () => {
+  const mk = (id: number, body: string, at: string): RawIssueComment => ({ id, body, created_at: at, user: null });
+  const three = [
+    mk(1, '第一条', '2026-07-29T10:00:00Z'),
+    mk(2, '第二条', '2026-07-29T11:00:00Z'),
+    mk(3, '第三条', '2026-07-29T12:00:00Z'),
+  ];
+
+  it('没记过 → 全部 pending。**他连发三条不会互相清掉**（这是位置推断的漏报洞）', () => {
+    const conv = classifyConversation(three);
+    expect(conv.map((c) => c.answered)).toEqual(['pending', 'pending', 'pending']);
+    expect(countsOf([], conv).needsReply).toBe(3);
+  });
+
+  it('位置推断的旧行为已经不存在 —— 非末条不再被判成已答', () => {
+    // 旧规则：i < len-1 → inferred（已答）。他连发三条，前两条被静默清掉。
+    const conv = classifyConversation(three);
+    expect(conv[0]!.answered).not.toBe('handled');
+    expect(conv[1]!.answered).not.toBe('handled');
+  });
+
+  it('记过的变 handled，且不进 needsReply / attention', () => {
+    const conv = classifyConversation(three, [], new Set([1, 2]));
+    expect(conv.map((c) => c.answered)).toEqual(['handled', 'handled', 'pending']);
+    expect(countsOf([], conv).needsReply).toBe(1);
+    expect(attentionOf([], conv).map((a) => a.id)).toEqual([3]);
+  });
+
+  it('全记过 → 干净', () => {
+    const conv = classifyConversation(three, [], new Set([1, 2, 3]));
+    expect(countsOf([], conv).needsReply).toBe(0);
+    expect(attentionOf([], conv)).toEqual([]);
+  });
+
+  it('answered 只有 handled / pending 两值，不再出现 inferred / unknown', () => {
+    for (const h of [new Set<number>(), new Set([2])]) {
+      for (const c of classifyConversation(three, [], h)) {
+        expect(['handled', 'pending']).toContain(c.answered);
+      }
+    }
+  });
+
+  it('降级并入总批的朱批同样受记录管', () => {
+    const note: RawReview = { id: 900, body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\nA', submitted_at: '2026-07-29T13:00:00Z' };
+    const notes = deskFallbackNotes([note]);
+    expect(classifyConversation([], notes)[0]!.answered).toBe('pending');
+    expect(classifyConversation([], notes, new Set([900]))[0]!.answered).toBe('handled');
+  });
+
+  it('counts 里已经没有 hasFollowUp（它数的是坏掉的推断的产物）', () => {
+    expect(countsOf([], classifyConversation(three))).not.toHaveProperty('hasFollowUp');
   });
 });
