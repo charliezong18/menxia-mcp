@@ -51,7 +51,7 @@ const main = async () => {
   console.log('\n── R1 · 服务能挂上 ──');
   const { tools } = await client.listTools();
   const names = tools.map((t) => t.name).sort();
-  check('tools/list 列出三个工具', names.join(',') === 'list_folders,mark_handled,read_comments', `实得 ${names.join(',')}`);
+  check('tools/list 列出四个工具', names.join(',') === 'lint_folder,list_folders,mark_handled,read_comments', `实得 ${names.join(',')}`);
   check('每个工具都有 inputSchema', tools.every((t) => t.inputSchema?.type === 'object'));
   check('状态文件被隔离到临时路径（不碰真实数据）', stateFile.startsWith(tmpdir()), stateFile);
 
@@ -184,6 +184,23 @@ const main = async () => {
   const r22 = (await call(client, 'read_comments', { pr: 22 })).folders[0];
   check('#22 那 4 条早回完的串不该再挂在 unclear（约定生效前发的回话没前缀）',
     r22.counts.unclear === 0, `unclear=${r22.counts.unclear}：${JSON.stringify(r22.attention?.map((a) => a.preview.slice(0, 24)))}`);
+
+  console.log('\n── Phase 2 · lint_folder 在真奏折仓上（R7：巡检与闸门共用一个核）──');
+  const reviewWt = `${process.env.HOME}/Developer/review`;
+  const lintMain = await call(client, 'lint_folder', { worktree: reviewWt, ref: 'origin/main', base: 'origin/main' });
+  check('main 自己对自己 → 没有 docs 改动，如实报硬伤而不是说「合格」',
+    lintMain.ok === false && lintMain.findings.some((f) => f.rule === 1 && f.subject === '(none)'),
+    JSON.stringify(lintMain.findings?.slice(0, 2)));
+
+  const openBranch = 'phase-2-design';
+  const lintFolder = await call(client, 'lint_folder', { worktree: reviewWt, ref: `origin/${openBranch}`, base: 'origin/main' });
+  check(`巡检形态：不 checkout 就能查 origin/${openBranch}`, Array.isArray(lintFolder.findings), JSON.stringify(lintFolder).slice(0, 120));
+  check('这折体例合格（它是照体例呈的）', lintFolder.ok === true, JSON.stringify(lintFolder.findings));
+  check('返回 dirtyDocs —— 查的是已提交内容，未提交的要说出来', Array.isArray(lintFolder.dirtyDocs));
+
+  const badTree = await callRaw(client, 'lint_folder', { worktree: '/tmp' });
+  check('不是 git 工作树 → 一句能照着改的话，不是 stack trace',
+    badTree.isError === true && /不是 git 工作树/.test(badTree.text), badTree.text?.slice(0, 80));
 
   console.log('\n── R6 · 错误面向模型可执行 ──');
   const notFound = await client.callTool({ name: 'read_comments', arguments: { pr: 999999 } });

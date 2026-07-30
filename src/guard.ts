@@ -83,7 +83,10 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
       if (
         base.startsWith('src/') &&
         base !== FS_WRITE_ALLOWED_FILE &&
-        /(from\s*['"]node:fs['"]|require\s*\(\s*['"](node:)?fs['"]\s*\)|from\s*['"]fs['"])/.test(code)
+        // `(\/promises)?` 是 2026-07-30 补的：Phase 2 设计阶段评审实测
+        // `import { readFile } from 'node:fs/promises'` **整条穿过去** ——
+        // 而那正是「换个写法顺手绕过守卫」最自然的形态。守卫自己犯了它要防的病。
+        /(from\s*['"]node:fs(\/promises)?['"]|require\s*\(\s*['"](node:)?fs(\/promises)?['"]\s*\)|from\s*['"]fs(\/promises)?['"])/.test(code)
       ) {
         out.push({ file, line, text: text.trim(), why: `只有 ${FS_WRITE_ALLOWED_FILE} 能 import fs` });
       }
@@ -116,8 +119,17 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
         out.push({ file, line, text: text.trim(), why: `网络出口只允许出现在 ${OCTOKIT_ALLOWED_FILE}` });
       }
 
-      // ⑥ git 写操作
-      if (/\bgit\b[\s\S]*?['"](push|commit|merge|tag)['"]|git\s+(push|commit|merge)\b/.test(code)) {
+      // ⑥ git 写操作。**只管 src/** —— 与 fs 那条同一个理由（②′）：
+      // 这条规则约束的是**跑起来的 server**，而 `scripts/` 是本地验收台，
+      // 它在 /tmp 造一次性样本仓（differential 每条规则一个必失败用例）是正当的。
+      // 把它也拦了只会逼人加例外，规则反而变松。
+      //
+      // 2026-07-30 收窄。收窄前 `scripts/lint-differential.mjs` 造样本仓时被拦，
+      // 而那些仓在 mkdtemp 出来的临时目录里、跑完就删，碰不到奏折仓。
+      if (
+        base.startsWith('src/') &&
+        /\bgit\b[\s\S]*?['"](push|commit|merge|tag)['"]|git\s+(push|commit|merge)\b/.test(code)
+      ) {
         out.push({ file, line, text: text.trim(), why: 'git 写操作' });
       }
     });
