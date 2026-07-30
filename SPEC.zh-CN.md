@@ -64,7 +64,9 @@ sessionId:  string?            覆盖用；不给则服务端自行探测，探�
 
 **`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
 
-拷入位置固定：`docs` 落 `docs/<basename>`，`assets` 落 `docs/assets/<basename>`——正文里按 `assets/` 打头的相对路径引用，与现有仓内布局一致。
+拷入位置：`docs` 落 `docs/<basename>`；`assets` 落 `docs/assets/…`——源路径里出现 `/assets/` 就**保留它后面的整段**，否则用 basename。正文里按 `assets/` 打头的相对路径引用。
+
+（2026-07-30 修正：上一版写的是一律拍平成 `docs/assets/<basename>`。仓里真实布局有子目录——`docs/assets/shots/annotate.png` 等，而 `docs/zhupi-readme.md` 引用的正是 `assets/shots/setup.png`。zhupi 按文档自身所在目录解析（`render.js:27`），拍平会让这类引用变成断图，而规则 4 会把账算在文档头上、让人去改正文——改完同一篇在两折里说的话就不一样了。）
 
 ![呈折流程与它的失败分支](assets/open-folder.png)
 
@@ -84,10 +86,19 @@ assets:  string[]?
 ### 3.3 `audit_folders` — 存量巡检
 
 ```
-fix: boolean?    默认 false。true 时补机械可补的（回奏对标记、draft 转正）
+（无入参）
 ```
 
-返回：每折的体例缺口。双语缺口只报不补（要翻译，机器补不了）。
+返回：每折的体例缺口 + 回奏对标记 + draft 状态。**纯只读。**
+
+**~~`fix`~~ —— 2026-07-30 实现时两件事都不能做，于是这个参数没有了。**
+
+- **补回奏对标记**：只补得成**当前**会话的 id，而那不是呈这折的那个会话 —— 是编一个。与 [§4.4](#44-回奏对标记的探测)「探不到就不埋，绝不编；静默指错比没有更糟」直接矛盾，后果是按钮把 Charlie 送进一个不相干的会话。老脚本 `audit-folders.sh:38` 就是这么补的。
+- **draft 转正**：GitHub REST 的 `PATCH /pulls/{n}` **不接受 `draft` 字段**，只能走 GraphQL 的 `markPullRequestReadyForReview`；而把 `POST /graphql` 放进写白名单等于开放全部 mutation（删仓、合折都走那一个端点），白名单当场失去意义。改成报一句 `gh pr ready <n>` 让人自己跑。
+
+连带：`PATCH /pulls/{n}` 没有用户了，从写白名单删掉 —— **这个 server 总共只能发两种写请求**：建折、回话。
+
+标记检查查的是**值**不是前缀：`<!-- happy-session: -->` 和格式不对的 id 在 zhupi 那边都渲染不出按钮（`link.js:88`），只查前缀等于报假绿。老脚本 `audit-folders.sh:32` 的 `grep -q 'happy-session:'` 就是这个毛病。
 
 ### 3.4 `list_folders` — 列折 / 「他批了吗」
 
@@ -120,11 +131,20 @@ folders: [{
 
 ```
 pr:        number
-commentId: number?    省略 = 发总批（conversation comment）
+commentId: number     inline 根批注 id。**必填**
 body:      string
 ```
 
-省掉 `commentId` 就是发总批，不单开一个工具。给了 `commentId` 走 `POST /pulls/{n}/comments/{id}/replies`，接成批注串而不是新开一条。
+走 `POST /pulls/{n}/comments/{id}/replies`，接成批注串而不是新开一条。首行的 `**回话**` 前缀由工具焊上（硬约定③），调用方不用自己写；首行是块级构造（围栏 / 列表 / 标题…）时前缀另起一段 —— zhupi 把 reply 正文整个过 markdown-it（`cards.js:48`），同一行会把代码块读成行内 code span。
+
+**~~省掉 `commentId` 就是发总批~~ —— 这条 2026-07-30 作废（Phase 3 实现时）。** 当天 10:54 立的硬约定①（`guard-reply-body.sh`）禁止 agent 往会话区发总批：agent 发的总批与 Charlie 的在 API 里完全同形（共用账号），会变成 `list_folders` 里清不掉的假待办 —— 实测 13 条 `needsReply` 里 7 条是 agent 自己的话，多报 77%。守卫比本节新且有实测数据，按守卫来。折级小结**在聊天里说**，要留档的元数据写进 `docs/<slug>.md` 正文。
+
+工具面上**根本没有发总批这个能力**（不是靠描述劝阻）：`WRITE_ALLOWED` 里就没有 `POST /issues/{n}/comments`。
+
+另外两条 Phase 3 加的 —— **三个 PreToolUse hook 只挂在 Claude Code 的 Bash 工具上，MCP 调用从它们旁边过去**，那些闸门必须在这一侧再实现一遍，否则 Phase 3 的净效果是「把呈折搬到了一条没有闸门的新路上」：
+
+- **已钦此/已关的折直接拒**（`guard-closed-folder` 那条）。2026-07-29 #23 实测：折已 merged 时 agent 照常回话，命令全部成功而结果是零。
+- **`commentId` 若是一条 reply，自动换成它的根**。GitHub 会不会归一化未知，而万一不会，zhupi 会把它当孤儿另起一张没有引文的卡（`anchor.js:165`）。
 
 ---
 
@@ -148,11 +168,25 @@ MCP 配置里写绝对路径：
 
 **先纠正一个想当然：stdio 型 MCP server 是每个会话各起一个进程，不是共享常驻的**，所以它天然做不到跨 session 排队。要防互踩得靠：
 
-- `flock` 锁 `~/Developer/review`（锁文件放仓外，如 `~/.zhupi-mcp/review.lock`）
+- 锁 `~/Developer/review`（锁文件放仓外：`~/.zhupi-mcp/review.lock`）
 - 每次 `open_folder` 在锁内开临时 worktree，用完即收
 - 锁等待超时返回可读错误，让调用方知道是另一个 session 在呈折，而不是挂死
 
 `worktree.ts` 是**唯一**碰 `~/Developer/review` 的模块。
+
+**~~`flock`~~ —— 2026-07-30 实现时发现这台机器上没有。** 本节原文写的是 `O_EXLOCK | O_NONBLOCK`。实测 Node v25.2.1 的 `fs.constants` 里**没有 `O_EXLOCK`**（`O_*` 只有 RDONLY / WRONLY / RDWR / CREAT / EXCL / NOCTTY / TRUNC / APPEND / DIRECTORY / NOFOLLOW / SYNC / DSYNC / SYMLINK / NONBLOCK），macOS 也没有 `flock(1)` 可以 shell 出去。照着写会得到 `O_CREAT | O_RDWR | undefined | O_NONBLOCK` —— `undefined` 在按位或里当 0，**锁标志静默消失，得到一把永远锁不上的锁，而且全部测试照绿**。
+
+现在的做法：`O_EXCL` 原子建锁文件，里面记 `{pid, at}`，三条判活任一成立就当陈旧可抢（内容读不出来 / pid 已死 / 超过 5 分钟）。**崩溃后不死锁靠的是判活，不是内核放锁** —— 这条差别决定了必须有一条真 `SIGKILL` 持锁子进程的测试，而不是断言「应该能拿到」。
+
+抢陈旧锁走 rename-aside，且三处必须成对存在（缺一条就会让两个进程同时进临界区，三条都是评审推演出来的，各配了一条接缝测试）：
+
+| 防御 | 不做会怎样 |
+|---|---|
+| 拿到锁后回读确认 pid 是自己的 | 别人在建锁与回读之间挪走了它，我揣着一把不存在的锁往下走 |
+| 挪走后核对挪到手的是刚才判陈旧的那一个 | B 判陈旧被调度走 → A 抢到并进入 → B 醒来挪走 A 的**有效**锁，两个人同时在里面 |
+| 释放前确认锁还是自己的 | 我持锁超过 5 分钟（一次慢 push）被 B 抢走，我收工时一句 `rmSync` 删掉 B 的有效锁 |
+
+跑 git 的子进程**必须带超时**（180 秒，env 可覆盖）：真机上 `commit.gpgsign=true` 会等 pinentry 弹窗、仓里的钩子也可能等输入，没有超时就是 server 永远挂着**而且锁还在手上**，别的会话跟着一起死。
 
 ![两个会话如何被锁串起来](assets/concurrency.png)
 
@@ -321,3 +355,22 @@ zhupi 自己那次 vanilla JS → Preact 迁移的头号风险是「修过的东
 中位数要漏译 40% 才报警，6 篇漏译 95% 都不报，且它结构上看不到单语文档
 （29 个单语 slug 里 25 个是「中文躺在英文槽」）。阈值不用改（0 误报，当 warn 跑没成本），
 但**别把它当「语言方向的保险」写进文档** —— 它目前只能抓「整篇一个字没翻」。
+
+### 5.5 Phase 3 的刻意改进登记表（2026-07-30）
+
+写入侧同样适用 §5.1「照实现移植」。下面每一条都是**新实现与老脚本行为不同**，
+逐条写清为什么，免得日后被当成 bug 修回去。
+
+| # | 老脚本 | 新实现 | 为什么 |
+|---|---|---|---|
+| 1 | lint 在分支已推上去之后跑 | **lint 卡在 commit 之后、push 之前** | `snapshot.ts` 读的是提交过的内容，不 commit 没得测；而在 push 前停住，不合格时远端一片干净。老脚本做不到 —— 它跑的时候分支早被人手推上去了 |
+| 2 | `audit-folders.sh --fix` 补回奏对标记 | **不补** | 只补得成当前会话的 id，那是编一个（§3.3、§4.4） |
+| 3 | `--fix` 把 draft 转正 | **只报，给命令** | REST 不支持，只能 GraphQL；开放 `POST /graphql` 等于开放全部 mutation |
+| 4 | `guard-reply-body.sh` 对缺 `**回话**` 前缀的做法是**拒绝** | **焊死**（自动补） | 「文档写了照样能跳过，所以焊进动作本身」（§3.1 的同一条理由）。代价是块级构造要自己接住 —— 首行是围栏 / 列表时前缀另起一段 |
+| 5 | 图一律落 `docs/assets/<basename>` | 源路径里有 `/assets/` 就**保留它后面整段** | 仓里真实布局是 `docs/assets/shots/*.png`，拍平会让既有文档的引用变断图，而规则 4 会把账算在文档头上 |
+| 6 | 巡检 `grep -q 'happy-session:'` | 查标记的**值** | 前缀在、值不合格时 zhupi 渲染不出按钮，只查前缀是报假绿 |
+| 7 | 分支已存在一律「换个 slug」 | **本地有 / 远端有分开说** | 「本地有、远端没有」唯一来源是上次崩在 push 之前，那时远端一片干净，正确动作是清掉重来而不是绕开 |
+| 8 | `open-folder.sh` 写 `PARITY.md` 台账 | **不写** | 新工具不跑老 bash lint，没有可对账的东西。**后果是 D1 的「连续 10 次」计数从此冻住**，而 D10（换什么判据）还没定 —— 见 [PARITY.md](PARITY.md) |
+| 9 | `SKIP_LINT=1` 无条件关闸逃生口 | **没有** | 尚未决定。这个项目自己记着「拦太死把人逼向绕过闸门」，所以缺这个口子是个已知的账，不是设计 |
+
+**8 和 9 是欠着的，不是解决了的。** 都在 #38 里挂着等 Charlie 拍板。
