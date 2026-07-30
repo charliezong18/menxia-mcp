@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import { Octokit } from '@octokit/rest';
-import { installReadOnlyGate, sanitizeParams } from '../src/github.js';
+import { installReadOnlyGate, sanitizeParams, get, resetAuthCache } from '../src/github.js';
 
 // R7 的执行机制在这里被证明，不在文本扫描里。
 //
@@ -42,6 +42,31 @@ describe('sanitizeParams：剔除能覆盖动词与地址的 key', () => {
   it('正常参数一个不少', () => {
     expect(sanitizeParams({ owner: 'o', repo: 'r', per_page: 100, state: 'open' }))
       .toEqual({ owner: 'o', repo: 'r', per_page: 100, state: 'open' });
+  });
+
+  // 2026-07-30 变异战役抓到：`get()` 里那句 sanitizeParams **零覆盖** ——
+  // 把它删掉全套测试照绿。上面两条测的是纯函数，没有一条证明 get() 真的调了它。
+  // method 那一路有运行时闸门兜着（断言 GET），但 url / baseUrl 没有 ——
+  // `get('GET /repos/{o}/{r}', { url: '/evil' })` 会打到另一个地址，而且仍然是 GET。
+  it('get() 真的调了 sanitizeParams —— url 想改地址，改不动', async () => {
+    await start();
+    const before = seen.length;
+    const prev = process.env.ZHUPI_GITHUB_BASEURL;
+    const prevTok = process.env.GH_TOKEN;
+    process.env.ZHUPI_GITHUB_BASEURL = baseUrl;
+    process.env.GH_TOKEN = 'fake-test-token';
+    resetAuthCache();
+    try {
+      await get('GET /repos/{owner}/{repo}', { owner: 'o', repo: 'r', url: '/evil', baseUrl: 'http://evil.invalid' }, {
+        pageGuard: { kind: 'unknown', detail: 'x' },
+      });
+      expect(seen.slice(before)).toEqual(['GET /repos/o/r']);
+    } finally {
+      if (prev === undefined) delete process.env.ZHUPI_GITHUB_BASEURL;
+      else process.env.ZHUPI_GITHUB_BASEURL = prev;
+      if (prevTok === undefined) delete process.env.GH_TOKEN;
+      resetAuthCache();
+    }
   });
 });
 

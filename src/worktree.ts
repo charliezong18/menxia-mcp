@@ -32,7 +32,13 @@ import { basename, join } from 'node:path';
 import { reviewPath } from './config.js';
 import { fail, isFailure } from './errors.js';
 
-export const LOCK_PATH_DEFAULT = `${process.env.HOME ?? tmpdir()}/.zhupi-mcp/review.lock`;
+/**
+ * 锁文件放**仓外**（SPEC §4.2）—— 放仓里会被 `git clean` 和 worktree 操作牵连。
+ * `ZHUPI_LOCK_PATH` 是测试接缝：集成测试要并发跑，不能去抢真机上的那把锁。
+ * 每次读 env 而不是模块加载时算一次，否则测试改了 env 也不生效。
+ */
+export const lockPathDefault = (): string =>
+  process.env.ZHUPI_LOCK_PATH ?? `${process.env.HOME ?? tmpdir()}/.zhupi-mcp/review.lock`;
 /** 超过这个岁数的锁一律当陈旧。临界区是秒级的，五分钟是极宽松的上界。 */
 export const STALE_MS = 5 * 60_000;
 const POLL_MS = 120;
@@ -45,6 +51,15 @@ export interface LockOpts {
   timeoutMs?: number;
   /** 测试用：让 kill(pid,0) 可替换。 */
   isAlive?: (pid: number) => boolean;
+  /**
+   * 测试接缝：在「建好锁」与「回读确认」之间插一手。
+   *
+   * 为它开一个口子是因为**没有它那句回读就是零覆盖的** —— 变异战役里
+   * 「拿到后不回读确认」原样存活。而回读防的是文件头写的那个残留竞态
+   * （A 读到陈旧锁 → C 抢先拿锁 → A 把 C 的新锁挪走），微秒级窗口靠并发跑是撞不出来的。
+   * 一句没有测试的防御等于一句注释。
+   */
+  onCreated?: () => void;
 }
 
 const liveByKill = (pid: number): boolean => {
@@ -75,7 +90,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, 
  * 三条判活，任一成立就当陈旧可抢：内容读不出来（写了一半就崩）、pid 已死、超过 STALE_MS。
  */
 export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
-  const path = opts.lockPath ?? LOCK_PATH_DEFAULT;
+  const path = opts.lockPath ?? lockPathDefault();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const alive = opts.isAlive ?? liveByKill;
   const dir = path.slice(0, path.lastIndexOf('/'));
@@ -90,6 +105,7 @@ export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
       const fd = openSync(path, 'wx');
       writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() } satisfies LockInfo));
       closeSync(fd);
+      opts.onCreated?.();
       // **回读确认是自己的。** 这一句关掉上面注释里那个残留竞态的另一半：
       // 如果有人在这两步之间把我的锁挪走了，我要重新排队，而不是揣着一把不存在的锁往下走。
       if (readLock(path)?.pid === process.pid) {

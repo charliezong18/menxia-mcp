@@ -98,6 +98,31 @@ describe('锁：崩溃后不能死锁（O_EXLOCK 在 Node 25 上不存在，这�
     release();
   });
 
+  // 变异战役（2026-07-30）里「拿到后不回读确认」**原样存活** —— 那句防御当时是零覆盖的。
+  // 它防的是文件头写的残留竞态：A 读到陈旧锁 → C 抢先拿锁 → A 把 C 的新锁挪走。
+  // 微秒级窗口靠并发跑撞不出来，所以开了 onCreated 这个接缝，直接把那一手插进去。
+  it('建好锁之后被人挪走 —— 回读发现不是自己的，重新排队而不是揣着假锁往下走', async () => {
+    const path = lockPath();
+    let stolen = 0;
+    const release = await acquireLock({
+      lockPath: path,
+      timeoutMs: 5_000,
+      onCreated: () => {
+        // 只偷第一次：第二轮让它正常拿到，否则测试会一直转到超时。
+        if (stolen === 0) {
+          stolen += 1;
+          writeFileSync(path, JSON.stringify({ pid: 999_999, at: Date.now() }));
+        }
+      },
+      // 偷锁那一手写的是个不存在的 pid，判活说它死了 —— 于是第二轮能抢回来。
+      isAlive: (pid) => pid === process.pid,
+    });
+    expect(stolen).toBe(1);
+    // 关键断言：最终握在手里的锁**确实是自己的**。
+    expect((JSON.parse(readFileSync(path, 'utf8')) as { pid: number }).pid).toBe(process.pid);
+    release();
+  }, 20_000);
+
   it('两个真进程同时抢 —— 持锁窗口不重叠（这才叫锁生效）', async () => {
     const path = lockPath();
     const one = (tag: string): Promise<string> => {
