@@ -32,6 +32,23 @@ export const FS_WRITE_ALLOWED: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 允许 **import fs** 的模块 —— 比上面那张写白名单宽一个成员。
+ *
+ * 两张表分开是 Phase 3 拆的。原来只有一张：`import fs` 和「写文件」共用同一个判据，
+ * 于是一个**只读**某个本地文件的模块（`session.ts` 读 `~/.happy/sessions.json`）
+ * 要么被迫进写白名单（白送一个写口），要么被迫绕道子进程（`snapshot.ts` 走 git 是
+ * 因为它本来就要跑 git，读个 JSON 再 shell out 就是为了骗守卫而扭曲代码 ——
+ * 而「换个写法绕过守卫」正是这条规则要防的病）。
+ *
+ * 拆开之后：`session.ts` 能拿到 fs，但它里面**只要出现写调用名就照样报**。
+ * 焊的仍然是写轴，只是不再连读一起焊死。
+ */
+export const FS_IMPORT_ALLOWED: ReadonlySet<string> = new Set([
+  ...FS_WRITE_ALLOWED,
+  'src/session.ts', // 只读 ~/.happy/sessions.json（Phase 3）
+]);
+
+/**
  * 允许跑 git 写命令的模块。
  *
  * Phase 3 之前 `src/` 全禁。`worktree.ts` 是 SPEC §4.2 指定的**唯一**碰奏折仓的模块，
@@ -106,13 +123,13 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
       // 它清自己的临时文件是正当的，把它也拦了只会逼人加例外，规则反而变松。
       if (
         base.startsWith('src/') &&
-        !FS_WRITE_ALLOWED.has(base) &&
+        !FS_IMPORT_ALLOWED.has(base) &&
         // `(\/promises)?` 是 2026-07-30 补的：Phase 2 设计阶段评审实测
         // `import { readFile } from 'node:fs/promises'` **整条穿过去** ——
         // 而那正是「换个写法顺手绕过守卫」最自然的形态。守卫自己犯了它要防的病。
         /(from\s*['"]node:fs(\/promises)?['"]|require\s*\(\s*['"](node:)?fs(\/promises)?['"]\s*\)|from\s*['"]fs(\/promises)?['"])/.test(code)
       ) {
-        out.push({ file, line, text: text.trim(), why: `只有 ${listOf(FS_WRITE_ALLOWED)} 能 import fs` });
+        out.push({ file, line, text: text.trim(), why: `只有 ${listOf(FS_IMPORT_ALLOWED)} 能 import fs` });
       }
 
       // ②″ 再补一张网：即便 fs 是当参数传进来的，写操作的名字也拦一遍。

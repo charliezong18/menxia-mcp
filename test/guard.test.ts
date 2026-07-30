@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { scanForMutations, scanForGlobalState, FS_WRITE_ALLOWED, GIT_WRITE_ALLOWED } from '../src/guard.js';
+import { scanForMutations, scanForGlobalState, FS_WRITE_ALLOWED, FS_IMPORT_ALLOWED, GIT_WRITE_ALLOWED } from '../src/guard.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -200,6 +200,20 @@ describe('白名单的长度被钉死（否则它会悄悄变长）', () => {
   it('git 写白名单恰好一个成员 —— SPEC §4.2：唯一碰奏折仓的模块', () => {
     expect([...GIT_WRITE_ALLOWED]).toEqual(['src/worktree.ts']);
     expect(GIT_WRITE_ALLOWED.size).toBe(1);
+  });
+
+  it('import fs 的白名单恰好三个，且比写白名单只多 session.ts 一个', () => {
+    expect([...FS_IMPORT_ALLOWED].sort()).toEqual(['src/processed.ts', 'src/session.ts', 'src/worktree.ts']);
+    const extra = [...FS_IMPORT_ALLOWED].filter((f) => !FS_WRITE_ALLOWED.has(f));
+    expect(extra).toEqual(['src/session.ts']);
+  });
+
+  // 拆成两张表的全部意义在这一条：能读 ≠ 能写。
+  // 不测它的话，「焊的仍然是写轴」就只是注释里的一句话。
+  it('session.ts 能 import fs，但它里面出现写调用照样报', () => {
+    expect(scanForMutations({ 'src/session.ts': "import { readFileSync } from 'node:fs';" })).toEqual([]);
+    const v = scanForMutations({ 'src/session.ts': "import { writeFileSync } from 'node:fs';\nwriteFileSync(p, x);" });
+    expect(v.map((x) => x.why)).toContain('写文件只允许出现在 src/processed.ts / src/worktree.ts');
   });
 });
 

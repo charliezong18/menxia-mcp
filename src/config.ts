@@ -10,6 +10,16 @@ export interface RepoRef {
 
 export const DEFAULT_REVIEW_REPO = 'charliezong18/review';
 
+/** 奏折仓的本地 checkout。**只有 worktree.ts 该用它**（SPEC §4.2）。 */
+export function reviewPath(env: NodeJS.ProcessEnv = process.env): string {
+  const p = (env.ZHUPI_REVIEW_PATH || '').trim();
+  if (p) return p;
+  const home = (env.HOME || '').trim();
+  // HOME 都没有就别猜了 —— 猜出来的路径要么不存在（还好），要么恰好是别的仓（很糟）。
+  if (!home) return fail({ kind: 'badInput', what: 'HOME 没设，也没给 ZHUPI_REVIEW_PATH' });
+  return `${home}/Developer/review`;
+}
+
 export function reviewRepo(env: NodeJS.ProcessEnv = process.env): RepoRef {
   const slug = (env.ZHUPI_REVIEW_REPO || DEFAULT_REVIEW_REPO).trim();
   const [owner, repo] = slug.split('/');

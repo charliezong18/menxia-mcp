@@ -12,6 +12,8 @@ export type ZhupiError =
   | { kind: 'badInput'; what: string }
   | { kind: 'tooManyComments'; repo: string; pr: number }
   | { kind: 'tooManyFolders'; repo: string }
+  | { kind: 'locked'; waitedMs: number; heldBy?: number }
+  | { kind: 'worktree'; what: string; hint?: string }
   | { kind: 'unknown'; detail: string };
 
 // —— 脱敏 ——
@@ -71,6 +73,14 @@ function raw(e: ZhupiError): string {
         '宁可明着失败也不静默少数——截断会把回话与根批注分到两页，回话变孤儿，凭空多出未回。';
     case 'tooManyFolders':
       return `${e.repo} 的折超过一页（100 个），本阶段不做分页。宁可明着失败也不静默少数。`;
+    case 'locked':
+      // 明着说「另一个会话在呈折」，别让调用方以为是自己写错了。
+      // 挂死才是最糟的形态：SPEC §4.2 要的就是「知道是在排队」而不是「不知道发生了什么」。
+      return `等了 ${Math.round(e.waitedMs / 1000)} 秒还没拿到奏折仓的锁` +
+        `${e.heldBy ? `（被进程 ${e.heldBy} 占着）` : ''}。多半是另一个会话正在呈折，` +
+        '等它完事再试。锁在 ~/.zhupi-mcp/review.lock，确认没有别的会话在跑的话可以删掉它。';
+    case 'worktree':
+      return `呈折没能建起来：${brief(e.what)}${e.hint ? `\n${e.hint}` : ''}`;
     case 'unknown':
       return `出了点没预料到的问题：${brief(e.detail)}`;
   }
