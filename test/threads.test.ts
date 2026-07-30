@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
+  conversationEntriesOf,
+  isOurReply,
   buildInlineThreads,
   classifyConversation,
   countsOf,
@@ -402,5 +404,84 @@ describe('总批的 answered 改用本地记录（review#29）', () => {
 
   it('counts 里已经没有 hasFollowUp（它数的是坏掉的推断的产物）', () => {
     expect(countsOf([], classifyConversation(three))).not.toHaveProperty('hasFollowUp');
+  });
+});
+
+describe('`**回话**` 前缀：把「判不了」变成「确定」（第一轮评审）', () => {
+  // 我在 skill 里写过「不盖前缀 list_folders 就分不出」——而当时**没有任何代码读它**。
+  // 那句因果是编的。这里是它的兑现处。
+  const root = (id: number): RawInlineComment => ({
+    id, path: 'docs/a.md', body: '这段太绕', created_at: '2026-07-29T10:00:00Z',
+    line: 3, diff_hunk: '@@ -1,2 +1,2 @@\n 这段太绕', pull_request_review_id: 900,
+  });
+  const reply = (id: number, body: string): RawInlineComment => ({
+    id, path: 'docs/a.md', body, created_at: '2026-07-29T11:00:00Z',
+    in_reply_to_id: 1, diff_hunk: '', pull_request_review_id: 901,
+  });
+  // 900 是朱批台发的（review body 带 marker）；901 是 /replies 自动建的空 body review——
+  // 他从 GitHub 网页在串里回话产生的也是空 body，两者完全同形。
+  const reviews: RawReview[] = [
+    { id: 900, body: '御笔朱批 · 1 条', submitted_at: '2026-07-29T10:00:00Z' },
+    { id: 901, body: '', submitted_at: '2026-07-29T11:00:00Z' },
+  ];
+
+  it('isOurReply 只认首行的加粗前缀', () => {
+    expect(isOurReply('**回话**\n\n改了')).toBe(true);
+    expect(isOurReply('  **回话** 改了')).toBe(true);
+    expect(isOurReply('改了。**回话**')).toBe(false);
+    expect(isOurReply('回话：改了')).toBe(false);
+    expect(isOurReply('')).toBe(false);
+  });
+
+  it('盖了前缀 → 这串**确定**已回，不再进 unclear', () => {
+    const t = buildInlineThreads([root(1), reply(2, '**回话**\n\n采纳，已改')], reviews);
+    expect(t[0]!.replies[0]!.ours).toBe(true);
+    expect(t[0]!.answered).toBe(true);
+    expect(countsOf(t, [])).toEqual({ needsReply: 0, unclear: 0 });
+    expect(attentionOf(t, [])).toEqual([]);
+  });
+
+  it('没盖前缀 → 仍然判不了，照旧进 unclear + attention', () => {
+    const t = buildInlineThreads([root(1), reply(2, '采纳，已改')], reviews);
+    expect(t[0]!.replies[0]!.ours).toBe(false);
+    expect(countsOf(t, [])).toEqual({ needsReply: 0, unclear: 1 });
+    expect(attentionOf(t, [])[0]!.why).toBe('reply-author-unclear');
+  });
+
+  it('**他在我方回话之后又追一句（没前缀）→ 必须回到 unclear**，不能因为前面盖过就当已回', () => {
+    const t = buildInlineThreads(
+      [root(1), reply(2, '**回话**\n\n采纳，已改'), reply(3, '不对，我说的是第二段')],
+      reviews,
+    );
+    expect(countsOf(t, []).unclear).toBe(1);
+    // 预览取最后一条，好让人一眼看出那不是我方的话
+    expect(attentionOf(t, [])[0]!.preview).toContain('我说的是第二段');
+  });
+
+  it('总批带 updatedAt，供 mark_handled 记水位', () => {
+    const c: RawIssueComment = {
+      id: 5, body: '看看', created_at: '2026-07-29T10:00:00Z', updated_at: '2026-07-29T18:00:00Z',
+    };
+    expect(classifyConversation([c])[0]!.updatedAt).toBe('2026-07-29T18:00:00Z');
+    // 没有 updated_at 时退回 created_at，不能是 undefined（会让水位比较永远为真）
+    expect(classifyConversation([{ ...c, updated_at: undefined }])[0]!.updatedAt).toBe('2026-07-29T10:00:00Z');
+  });
+});
+
+describe('conversationEntriesOf：水位必须取 updated_at（第二轮评审的接缝）', () => {
+  // 这个接缝上一版没有测试：把它改成 created_at 之后 175 条全绿，
+  // 而真数据上「他编辑过的总批」立刻被吞回 handled —— 原漏报复现。
+  it('有 updated_at 就用它', () => {
+    expect(conversationEntriesOf([
+      { id: 1, body: 'x', created_at: '2026-07-29T10:00:00Z', updated_at: '2026-07-29T20:00:00Z' },
+    ])).toEqual([{ id: 1, updatedAt: '2026-07-29T20:00:00Z' }]);
+  });
+
+  it('没有就退回 created_at，不能是 undefined（会让水位比较永远为真）', () => {
+    for (const at of [undefined, null]) {
+      expect(conversationEntriesOf([
+        { id: 1, body: 'x', created_at: '2026-07-29T10:00:00Z', updated_at: at },
+      ])).toEqual([{ id: 1, updatedAt: '2026-07-29T10:00:00Z' }]);
+    }
   });
 });

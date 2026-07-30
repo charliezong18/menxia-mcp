@@ -59,9 +59,24 @@ Phase 1 is **read-only** — the lowest cost of being wrong, and the benefit is 
 **How it passes**
 
 - An inline annotation with no reply from us → unanswered
-- A comment of yours in the conversation area with no later comment from us → unanswered (**listing opinions in one block without highlighting lines also counts as annotating**, which is the existing convention)
+- An overall comment in the conversation area: **unanswered unless the agent has recorded it as handled** (**listing opinions in one block without highlighting lines also counts as annotating**, which is the existing convention)
 - Annotations we posted ourselves do not count toward unanswered
 - The determination happens on the server, not by handing the raw list back for the model to work out
+
+
+**A known inconsistency, stated here rather than hidden** (review#29 + review round 1):
+
+That conversation-area criterion used to read "no later comment from us" — inference from
+position. Once the agent stopped posting folder-level summaries the area became a one-way
+inbox, and that inference silently marks the first of two consecutive comments from you as
+answered (**under-report**), so it now consults a local record instead. The cost is that
+**the overall-comment half over-reports**: the agent and you share one GitHub account, so
+overall comments the agent posted in the past also show as `pending` and the API cannot
+tell them apart.
+
+The failure direction is deliberate — over-reporting only makes someone read a few extra
+items (`attention` carries a body preview, so they are easy to spot), whereas under-reporting
+swallows your words. **The two are not symmetric.**
 
 ---
 
@@ -87,7 +102,7 @@ Phase 1 is **read-only** — the lowest cost of being wrong, and the benefit is 
 
 ---
 
-## R7 · Strictly read-only
+## R7 · No remote writes
 
 **Must hold**: this phase cannot change any remote state.
 

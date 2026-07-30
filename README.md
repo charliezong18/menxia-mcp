@@ -13,9 +13,11 @@ zhupi is where a human reads and annotates AI-authored documents. This is the ot
 
 ---
 
-## Status: Phase 1 shipped (two read-only tools)
+## Status: Phase 1 shipped (two read-only tools plus a local-write-only `mark_handled`)
 
-**Installable and usable.** `list_folders` and `read_comments` are implemented and wired into the MCP config; 119 unit tests plus 41 real-machine assertions are green, run against live GitHub data.
+**Installable and usable.** `list_folders`, `read_comments` and `mark_handled` are implemented and wired into the MCP config; 175 unit tests plus 57 real-machine assertions are green, run against live GitHub data.
+
+The first two write **nothing at all**. `mark_handled` writes exactly one local file (`~/.zhupi-mcp/processed.json`) and **never touches GitHub** — which is why R7 is stated precisely as "no remote writes", with a guard rule pinning "no fs write anywhere under `src/` except `processed.ts`".
 
 Measured context saved versus the string of `gh api` calls it replaces: **7.1×** for one folder, **3.9×** across all open folders (41 KB → 5.8 KB). That was the headline reason to build this, and the number holds.
 

@@ -28,6 +28,12 @@ const call = async (client, tool, args = {}) => {
   return JSON.parse(text);
 };
 
+/** 拿错误文本而不是抛——「该被拒的输入真的被拒了」也是判据。 */
+const callRaw = async (client, tool, args = {}) => {
+  const res = await client.callTool({ name: tool, arguments: args });
+  return { isError: res.isError === true, text: res.content?.[0]?.text ?? '' };
+};
+
 const main = async () => {
   // **必须显式传 env**：StdioClientTransport 默认只透一小部分安全变量，
   // 不传的话 server 会写到家目录的真实状态文件里——第一次跑就污染了我的真数据（实测）。
@@ -95,7 +101,31 @@ const main = async () => {
   check('needsReply 少 1', after.folders[0].counts.needsReply === 1, `实得 ${after.folders[0].counts.needsReply}`);
   check('attention 少 1 条', after.folders[0].attention.length === 1, `实得 ${after.folders[0].attention.length}`);
   const again = await call(client, 'mark_handled', { pr: 18, ids: [firstId] });
-  check('重复标记如实报 0 新增（不谎报）', again.added?.length === 0 && again.alreadyHandled === 1, JSON.stringify(again));
+  check('重复标记如实报 0 新增（不谎报）',
+    again.added?.length === 0 && again.alreadyHandled?.length === 1 && again.refreshed?.length === 0, JSON.stringify(again));
+
+  console.log('\n── 第一轮评审那几条高危，实机验一遍 ──');
+  const strErr = await callRaw(client, 'mark_handled', { pr: 18, ids: [String(firstId)] });
+  check('字符串 id 硬拒，不是静默 no-op 返回成功', strErr.isError === true && /正整数/.test(strErr.text), strErr.text?.slice(0, 90));
+
+  const bothErr = await callRaw(client, 'mark_handled', { pr: 18, ids: [firstId], seed: true });
+  check('seed 与 ids 同时给 → 拒（v1 是 seed 静默胜出、整折被标掉）', bothErr.isError === true && /只能给一个/.test(bothErr.text), bothErr.text?.slice(0, 90));
+
+  const ghostErr = await callRaw(client, 'mark_handled', { pr: 18, ids: [999999999] });
+  check('不在这折里的 id → 拒，并告诉去哪拿 id', ghostErr.isError === true && /没有这些总批/.test(ghostErr.text), ghostErr.text?.slice(0, 90));
+
+  const dry = await call(client, 'mark_handled', { pr: 9, seed: true });
+  check('seed 不带 confirm 只预览，dryRun=true', dry.dryRun === true && dry.targets?.length > 0, JSON.stringify(dry).slice(0, 140));
+  check('预览里带正文，看得清将要标掉什么', dry.targets?.every((t) => t.preview?.length > 0), JSON.stringify(dry.targets?.[0]));
+  const after9 = await call(client, 'read_comments', { pr: 9 });
+  check('**预览没有落盘** —— #9 那条真待办还在', after9.folders[0].counts.needsReply === dry.wouldMark, `${after9.folders[0].counts.needsReply} vs ${dry.wouldMark}`);
+
+  const undone = await call(client, 'mark_handled', { pr: 18, ids: [firstId], undo: true });
+  check('undo 撤得掉（唯一的写操作必须有回退）', undone.removed?.length === 1, JSON.stringify(undone));
+  const back = await call(client, 'read_comments', { pr: 18 });
+  check('撤销后回到 pending', back.folders[0].conversation[0].answered === 'pending', JSON.stringify(back.folders[0].conversation.map((c) => c.answered)));
+  check('read_comments 带 handledIds + stateFile，能查「这条我处理没有」',
+    Array.isArray(back.folders[0].handledIds) && typeof back.stateFile === 'string', JSON.stringify(back.folders[0].handledIds));
 
   console.log('\n── R2 · list_folders ──');
   const open = await call(client, 'list_folders');

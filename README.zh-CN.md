@@ -13,9 +13,11 @@
 
 ---
 
-## 状态：Phase 1 已上线（两个只读工具）
+## 状态：Phase 1 已上线（两个只读工具 + 一个只写本地的 mark_handled）
 
-**能装、能用。** `list_folders` 与 `read_comments` 已实现并挂进 MCP 配置，119 条单测 + 41 条实机断言全绿，实机跑的是真 GitHub 数据。
+**能装、能用。** `list_folders`、`read_comments`、`mark_handled` 已实现并挂进 MCP 配置，175 条单测 + 57 条实机断言全绿，实机跑的是真 GitHub 数据。
+
+前两个**绝对不写任何东西**。`mark_handled` 只写一个本地文件（`~/.zhupi-mcp/processed.json`），**不碰 GitHub** —— R7 的口径因此精确成「不写远端」，并有一条守卫规则焊死「`src/` 里除 `processed.ts` 之外不许出现 fs 写」。
 
 实测省下的上下文（对比原来那串 `gh api`）：读单折 **7.1×**，读全部 open 折 **3.9×**（41 KB → 5.8 KB）。这是建这东西的头号理由，数字站得住。
 
