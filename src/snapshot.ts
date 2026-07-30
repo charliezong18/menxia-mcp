@@ -30,8 +30,26 @@ export interface SnapshotOpts {
 
 export class NotAGitWorktree extends Error {}
 
+/**
+ * 跑 git。两个参数是**必须**的，别删：
+ *
+ * ① `-c core.quotePath=false`：git 默认把非 ASCII 路径转义成八进制加引号
+ *    （`"docs/assets/\347\253\213..."`）。不关掉的话中文名文件**全挂** ——
+ *    assets 集合里是转义串、正文引用是真名，永远对不上 → 中文名的图一律误报断图（硬伤）；
+ *    changed 里的路径也带引号 → `git show ref:"docs\344..."` 必失败 → 双语齐的也报缺译本。
+ *    第一轮评审实测：奏折仓 #31 那折 22 个中文名文档全部踩在上面。
+ *
+ * ② `maxBuffer`：默认 1 MiB，超了抛 ENOBUFS 被 catch 吞掉返回 null，
+ *    等价于「文件不存在」—— 于是大文档既谎报缺译本、又让规则 4 整条不跑（真断图漏报）。
+ *    静默降级，不会有人发现。
+ */
 function raw(cwd: string, args: string[]): string {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  return execFileSync('git', ['-c', 'core.quotePath=false', ...args], {
+    cwd,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
 
 /** 跑 git 拿**标量**（sha / 计数 / 路径清单），去掉尾部换行。失败返回 null。 */
@@ -77,8 +95,10 @@ export function collect(opts: SnapshotOpts = {}): Snapshot {
     behind = Number(tryGit(cwd, ['rev-list', '--count', `${baseSha}..${baseHead}`]) ?? '0') || 0;
   }
 
-  // 只看 docs 顶层的 md，与老脚本的 `docs/*.md` 一致（**不递归** —— 那是老脚本的行为，
-  // 不是疏漏也不是刻意，只是 glob 就这样。改它属于扩大范围，不在 Phase 2 内）。
+  // pathspec `docs/*.md` 里的 `*` **跨 `/`**，所以子目录里的 md 也会命中 ——
+  // 与老脚本一致（第一轮评审实测；我原来的注释写「不递归」是错的）。
+  // 已知后果：子目录文档的图片引用仍按 `docs/assets/` 解析，而 GitHub 按相对路径解析，
+  // 两边不一致。这是从老脚本继承的洞，改它属于扩大范围 —— 记在 BACKLOG，不在 Phase 2 内。
   const diff = tryGit(cwd, ['diff', '--name-only', `${base}...${ref}`, '--', 'docs/*.md']) ?? '';
   const changed = diff.split('\n').map((s) => s.trim()).filter(Boolean).sort();
 

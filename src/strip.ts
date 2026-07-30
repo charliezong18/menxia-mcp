@@ -27,7 +27,11 @@ export function stripCode(md: string): string {
   for (const line of lines) {
     const m = /^\s{0,3}(`{3,}|~{3,})/.exec(line);
     if (fence === null) {
-      if (m) {
+      // **行首的反引号不一定是围栏。** 一行以 ``` 开头、同一行还有等长反引号闭合时，
+      // 那是行内 code 不是围栏。第一轮评审实测：正文写 "```md``` is the info string form."
+      // 会开出一个假围栏，把**整篇剩下的内容**当代码剥掉 → 真断图漏报，
+      // 而那正是 2026-07-27「他读到断图」那条疤本身。
+      if (m && isFence(line, m[1]!)) {
         fence = { char: m[1]![0]!, len: m[1]!.length };
         out.push(blank(line)); // 围栏行本身也剥掉——它可能带 info string（如 ```ts）
         continue;
@@ -46,6 +50,18 @@ export function stripCode(md: string): string {
 }
 
 const blank = (s: string): string => ' '.repeat(s.length);
+
+/**
+ * 行首这段反引号是围栏还是行内 code？
+ *
+ * 判据：围栏行的**信息串里不能再出现同种字符**（CommonMark 规则）。
+ * 所以同一行后面还有等长或更长的同种反引号 → 那是行内 code 的闭合，不是围栏。
+ * `~~~` 没有这条限制，但同样的形状（`~~~x~~~`）在实践中也是行内用法，一并按此判。
+ */
+function isFence(line: string, opener: string): boolean {
+  const rest = line.slice(line.indexOf(opener) + opener.length);
+  return !rest.includes(opener[0]!.repeat(opener.length));
+}
 
 /**
  * 剥单行里的 inline code。

@@ -87,9 +87,13 @@ describe('规则 3 · .payload 例外 + 勿复制横幅', () => {
     expect(rules(snap({ files }))).toContain(2);
   });
 
-  it('.payload 里写不带 docs/ 前缀的路径也认（老脚本查两个位置）', () => {
+  it('**登记项必须带 docs/ 前缀**（老脚本是 grep -qxF，整行逐字节）', () => {
+    // 我上一版把「老脚本查两个**文件位置**」（docs/.payload 和 .payload）
+    // 误读成「两种**路径写法**」，于是额外接受剥掉前缀的写法 —— 那是放宽豁免面。
+    // 两个文件位置由 snapshot.ts 负责合并，与路径写法无关。
     const files = new Map([['docs/a.md', bare], ['docs/a.zh-CN.md', `${ZH('a')}\n\n不要从本页复制`]]);
-    expect(rules(snap({ files, payload: ['a.md'] }))).not.toContain(2);
+    expect(rules(snap({ files, payload: ['a.md'] }))).toContain(2);
+    expect(rules(snap({ files, payload: ['docs/a.md'] }))).not.toContain(2);
   });
 
   it('中文版的互链头**照样要查** —— 例外只免英文版', () => {

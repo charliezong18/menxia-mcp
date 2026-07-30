@@ -76,3 +76,39 @@ about two weeks**, at which point the tool stops working entirely.
 The "fail loudly rather than silently return fewer" decision stands, but by then the error
 text must at least offer a usable detour (list open only, or `read_comments(pr)` directly).
 Not doing it now because the open side is much further away (16).
+
+## Debts left by Phase 2's first review round (noted 2026-07-30)
+
+**① `$ZH（` in the old `folder-lint.sh:58` is an unbound bash variable.** The full-width
+parenthesis counts as part of the identifier, so under `set -u` the subshell running the slug
+loop **dies on the spot** — meaning the "missing Chinese version" rule **has never worked**,
+and every slug sorted after it goes unchecked too. Same disease at `open-folder.sh:65` (`$sec」`).
+
+Consequence: "the old script is authoritative" is wrong for this one rule during the
+reconciliation window, and such folders still get submitted. Out of scope for Phase 2 because
+touching the old script means touching the gate itself; but **it keeps one differential row
+permanently red** (registered as "old-script bug, new implementation correct").
+
+**② The old script prints git-escaped Chinese filenames straight at the user**
+(`✗ guanzhi-00-\345...md" 缺英文版`), because it does not set `core.quotePath=false` either.
+A display bug; the verdict itself is right.
+
+**③ Image resolution for docs in subdirectories disagrees with GitHub.** The `*` in the
+`docs/*.md` pathspec crosses `/`, so `docs/sub/x.md` is checked; but references are always
+resolved against `docs/assets/` while GitHub resolves them relatively (`docs/sub/assets/`).
+Wrong in both directions. Inherited from the old script; fixing it widens scope.
+
+**④ Image references inside indented code blocks and HTML comments raise false hard errors.**
+`stripCode` only strips unindented fences and inline code; a fence indented four spaces inside
+a nested list, or `<!-- ![x](assets/y.png) -->`, both read as real references. The "a document
+about lint rules cannot pass lint" case history is only half closed.
+
+**⑤ The submission gate guards against slips, not against going around it.** The first review
+round measured six bypasses: wrapping in a script, `xargs`, `eval`, python `subprocess`,
+`git push` plus creating the PR in the web UI, and any non-Claude-Code runtime (agy, a plain
+terminal). The three PreToolUse hooks only attach to Claude Code's Bash tool; no amount of
+added patterns closes this layer.
+
+The only real closure is to **move the criterion into the repo** (CI on main validating the
+format of every PR). That is Phase 3/4 scope, and it needs Charlie's sign-off first — adding CI
+changes how submission feels to him.

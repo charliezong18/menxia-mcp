@@ -18,9 +18,9 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "tsc --noEmit && vitest run && node scripts/print-milestones.mjs && node scripts/print-parity.mjs",
+    "test": "tsc --noEmit && vitest run && node scripts/print-milestones.mjs; node scripts/print-parity.mjs",
     "test:watch": "vitest",
-    "acceptance": "npm run build && node scripts/acceptance.mjs",
+    "acceptance": "npm run build && node scripts/acceptance.mjs && node scripts/lint-differential.mjs",
     "diagrams": "./render-diagrams.sh",
     "differential": "npm run build && node scripts/lint-differential.mjs"
   },

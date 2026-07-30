@@ -45,20 +45,52 @@ const sh = (cmd, args, cwd) => {
  * 这个项目已经在「测试恒绿」上栽了三次。所以必须比到 subject 粒度。
  * 老脚本的失败行只有几种固定前缀，各带一个 subject 槽。
  */
+/**
+ * 解开 git 的八进制转义路径。
+ *
+ * 老脚本也没设 `core.quotePath=false`，所以中文名文件在它的输出里是
+ * `"docs/guanzhi-00-\\345\\221\\210....md"`，而且尾随一个引号让 `.md` 后缀剥不掉。
+ * 两边**判定其实一致**（都报同样 22 个 slug 缺对面），只是 subject 拼法不同 ——
+ * 这是归一化的活，不是行为差异。第一轮评审那条中文名回归修完之后剩下的就是它。
+ *
+ * 顺带记一笔：老脚本会把转义名直接打给人看（`✗ guanzhi-00-\\345...md" 缺英文版`），
+ * 那是它自己的显示 bug，已记 BACKLOG。
+ */
+function unquoteGitPath(raw) {
+  let s = raw.trim();
+  if (!s.includes('\\')) return s.replace(/^"|"$/g, '');
+  s = s.replace(/^"|"$/g, '');
+  const bytes = [];
+  for (let i = 0; i < s.length; ) {
+    const m = /^\\([0-7]{3})/.exec(s.slice(i));
+    if (m) {
+      bytes.push(parseInt(m[1], 8));
+      i += 4;
+    } else {
+      bytes.push(...Buffer.from(s[i], 'utf8'));
+      i += 1;
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
+}
+
+/** 老脚本报的 subject 归一：解转义 + 剥 .md / .zh-CN.md（引号让它原来剥不掉）。 */
+const oldSubject = (raw) => unquoteGitPath(raw).replace(/\.zh-CN\.md$/, '').replace(/\.md$/, '');
+
 function normalizeOld(text) {
   const out = new Set();
   for (const line of text.split('\n')) {
     const s = line.trim();
     let m;
-    if ((m = /^✗ 断图：(.+)$/.exec(s))) out.add(`4:hard:${m[1]}`);
-    else if ((m = /^✗ (\S+) 缺中文版/.exec(s))) out.add(`1:hard:${m[1]}`);
-    else if ((m = /^✗ (\S+) 缺英文版/.exec(s))) out.add(`1:hard:${m[1]}`);
-    else if ((m = /^✗ (\S+) 英文版首行互链头不对/.exec(s))) out.add(`2:hard:${m[1]}`);
-    else if ((m = /^✗ (\S+) 中文版首行互链头不对/.exec(s))) out.add(`2:hard:${m[1]}`);
-    else if ((m = /^✗ (\S+) 中文版缺「勿从本页复制」横幅/.exec(s))) out.add(`3:hard:${m[1]}`);
+    if ((m = /^✗ 断图：(.+)$/.exec(s))) out.add(`4:hard:${unquoteGitPath(m[1])}`);
+    else if ((m = /^✗ (\S+) 缺中文版/.exec(s))) out.add(`1:hard:${oldSubject(m[1])}`);
+    else if ((m = /^✗ (\S+) 缺英文版/.exec(s))) out.add(`1:hard:${oldSubject(m[1])}`);
+    else if ((m = /^✗ (\S+) 英文版首行互链头不对/.exec(s))) out.add(`2:hard:${oldSubject(m[1])}`);
+    else if ((m = /^✗ (\S+) 中文版首行互链头不对/.exec(s))) out.add(`2:hard:${oldSubject(m[1])}`);
+    else if ((m = /^✗ (\S+) 中文版缺「勿从本页复制」横幅/.exec(s))) out.add(`3:hard:${oldSubject(m[1])}`);
     else if (/^✗ 相对 main 没有任何 docs/.test(s)) out.add('1:hard:(none)');
     else if (/^⚠ 落后 main/.test(s)) out.add('6:warn:HEAD');
-    else if ((m = /^⚠ (\S+) 已在 main 上/.exec(s))) out.add(`7:warn:docs/${m[1]}`);
+    else if ((m = /^⚠ (\S+) 已在 main 上/.exec(s))) out.add(`7:warn:docs/${unquoteGitPath(m[1])}`);
   }
   return [...out].sort();
 }
