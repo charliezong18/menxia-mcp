@@ -38,12 +38,19 @@ const rgate = () => installReadOnlyGate(new Octokit({ auth: 'fake', baseUrl, req
 // 44 条守卫测试一条没红。守卫自己的注释承认它已降级为辅助 lint，那么「写入面有多大」
 // 就必须由这条长度断言来守。加一条路由 = 必须改这里 = 必须被人看见一次。
 describe('写入面的大小被钉死', () => {
-  it('白名单恰好三条，且就是这三条', () => {
+  // 从三条收到两条：`PATCH /pulls/{n}` 的两个用户实现时都没了 ——
+  // 补标记只能补成当前会话的 id（编一个，§4.4 禁止），draft 转正 REST 根本不支持
+  // （只能走 GraphQL，而 `POST /graphql` 进白名单等于开放全部 mutation）。
+  // 没有用户的路由不留着。
+  it('白名单恰好两条，且就是这两条', () => {
     expect([...WRITE_ALLOWED]).toEqual([
       'POST /repos/{owner}/{repo}/pulls',
-      'PATCH /repos/{owner}/{repo}/pulls/{pull_number}',
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies',
     ]);
+  });
+
+  it('没有任何一条能改已存在的折 —— 建折与回话之外，写不了别的', () => {
+    expect(WRITE_ALLOWED.filter((r) => /^(PATCH|PUT|DELETE)/.test(r))).toEqual([]);
   });
 
   it('没有一条是 GET —— 读走 get()', () => {

@@ -69,9 +69,16 @@ export function installReadOnlyGate(oc: Octokit): Octokit {
 // （实测 `{+repo}` 传 `r/pulls/1/merge` 会原样拼进路径，逃到 merge 端点；
 // 普通 `{repo}` 会编码成 `r%2Fpulls%2F1%2Fmerge`）。`{+repo}` 的模板与白名单里的
 // `{repo}` 逐字不等 → 直接被拒。这是 fail-closed 的方向。
+// **两条，不是三条。** 原本还列了 `PATCH /pulls/{n}`（「补 body / draft 转正」），
+// 实现时两个用户都没了：
+//   · 补「回奏对」标记 —— 补的只能是**当前**会话的 id，那不是呈这折的那个会话，
+//     是编一个。与 §4.4「探不到就不埋，绝不编」直接矛盾，所以不做（见 audit_folders）。
+//   · draft 转正 —— REST 的 PATCH **不接受 draft 字段**，只能走 GraphQL 的
+//     markPullRequestReadyForReview；而把 `POST /graphql` 放进白名单等于开放全部 mutation，
+//     白名单当场失去意义。改成报一句 `gh pr ready <n>` 让人自己跑。
+// 没有用户的路由不留在白名单里 —— 留着就是一个随时会被顺手用上的写口。
 export const WRITE_ALLOWED: readonly string[] = [
   'POST /repos/{owner}/{repo}/pulls',
-  'PATCH /repos/{owner}/{repo}/pulls/{pull_number}',
   'POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies',
 ];
 

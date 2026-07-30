@@ -123,6 +123,30 @@ describe('R7 守卫自验：参数被拆成数组元素的写法（第一版漏�
     expect(scanForMutations({ 'src/x.ts': "run('gh pr merge 1 --squash')" }).length).toBeGreaterThan(0);
   });
 
+  // 2026-07-30（Phase 3）补：数组拆分的写法本来一直漏着。
+  // `\bgh\b\s+(pr|…)` 过不了中间那个 `', ['`，而这是 execFile 最自然的写法。
+  it('抓得到数组拆开的 gh 子命令写操作（本来漏着）', () => {
+    for (const code of [
+      "execFile('gh', ['pr', 'create', '--title', t])",
+      "run('gh', ['pr','merge','1','--squash'])",
+      "await run('gh', ['issue', 'close', String(n)])",
+    ]) {
+      expect(scanForMutations({ 'src/x.ts': code }).length, code).toBeGreaterThan(0);
+    }
+  });
+
+  // 2026-07-30（Phase 3）收窄：错误提示文案里的命令不是要执行的命令。
+  // SPEC §7 把这个病根记了三遍，这是它在 TS 侧的第四次。
+  it('错误提示文案里提到 gh 命令不算违规（写入侧每条提示都要带恢复命令）', () => {
+    for (const code of [
+      'return `标记没落进 #${pr} 的 body。补：gh pr edit ${pr} -R ${slug} --body-file <(...)`;',
+      "hint: `网络好了补一句：gh pr create -R ${slug} --head ${branch}`,",
+      "problems.push(`还是 draft —— 跑 gh pr ready ${n} -R ${slug}`);",
+    ]) {
+      expect(scanForMutations({ 'src/submit.ts': code }), code).toEqual([]);
+    }
+  });
+
   it('读操作的 gh 调用不误伤', () => {
     expect(scanForMutations({ 'src/x.ts': "run('gh', ['auth', 'token'])" })).toEqual([]);
     expect(scanForMutations({ 'src/x.ts': "run('gh', ['pr', 'view', '18'])" })).toEqual([]);
