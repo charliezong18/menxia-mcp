@@ -11,7 +11,7 @@ const asText = (v: unknown) => ({ content: [{ type: 'text' as const, text: JSON.
 
 async function main(): Promise<void> {
   const server = new Server(
-    { name: 'zhupi-mcp', version: '0.1.0' },
+    { name: 'menxia-mcp', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 
