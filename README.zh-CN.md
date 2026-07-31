@@ -4,10 +4,10 @@
 
 # zhupi-mcp
 
-**[门下](https://github.com/charliezong18/zhupi)的 agent 侧，做成 MCP server。**<br>
+**[门下](https://github.com/charliezong18/menxia)的 agent 侧，做成 MCP server。**<br>
 涂归是人读 AI 写的长文档、划句留批注的地方。这个仓是那个循环的另一头：agent 用来呈上文档、读回批注、逐条回话的那套工具。
 
-[设计定稿](SPEC.zh-CN.md) · [里程碑](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi 本体](https://github.com/charliezong18/zhupi)
+[设计定稿](SPEC.zh-CN.md) · [里程碑](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi 本体](https://github.com/charliezong18/menxia)
 
 </div>
 
@@ -34,7 +34,7 @@ POST /repos/{owner}/{repo}/pulls/{n}/comments/{id}/replies                回话
 
 装法：
 ```json
-{ "mcpServers": { "zhupi": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
+{ "mcpServers": { "menxia": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
 ```
 先 `npm install && npm run build`。认证借机器上已有的 `gh`，不需要另配 PAT。
 

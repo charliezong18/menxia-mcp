@@ -4,7 +4,7 @@
 
 Final Design · 2026-07-28
 
-Companion product: [`charliezong18/zhupi`](https://github.com/charliezong18/zhupi) (the annotation desk (zhupi), human side). This repo is the agent side.
+Companion product: [`charliezong18/menxia`](https://github.com/charliezong18/menxia) (the annotation desk (zhupi), human side). This repo is the agent side.
 
 ---
 
@@ -36,7 +36,7 @@ This iteration solves the two things left unsolved from that time.
 
 - **sealed (squash-merged) will not be a tool.** That is an action Charlie clicks on the annotation desk (zhupi); the agent side has no reason to hold this capability.
 - **Post-delivery ledger entry will not be a tool** (tracker numbers, STATUS.md in-flight tables) — those are scattered across different vault locations, belong to the skill's prose responsibilities, and are unfit to be hardcoded into schemas.
-- **No changes to the zhupi frontend.** This repo couples with `charliezong18/zhupi` solely via GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
+- **No changes to the zhupi frontend.** This repo couples with `charliezong18/menxia` solely via GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
 
 ---
 
@@ -61,7 +61,7 @@ sessionId:  string?            For override; if absent, the server auto-detects,
 monolingual: boolean?          This folder is a monolingual reading, exempt from the bilingual pair; registered in docs/.monolingual
 ```
 
-Returns: PR number, PR URL, deep link to the annotation desk (zhupi) `https://charliezong18.github.io/zhupi/?pr=<n>`, lint report.
+Returns: PR number, PR URL, deep link to the annotation desk (zhupi) `https://charliezong18.github.io/menxia/?pr=<n>`, lint report.
 
 **`docs` passes paths, not full text**, this is deliberate. Running on the same machine, the server copies files into the worktree it manages; the agent never touches `~/Developer/review` — parallel trampling is exactly what blocks execution. Passing full text via tool arguments not only wastes tokens, but also keeps the agent in the mental model of "I can write into that repo myself".
 
@@ -162,7 +162,7 @@ Node 20 + TypeScript, `@modelcontextprotocol/sdk`, stdio transport.
 Write absolute paths in the MCP config:
 
 ```json
-{ "command": "node", "args": ["/Users/charliezong/Developer/zhupi-mcp/dist/index.js"] }
+{ "command": "node", "args": ["/Users/charliezong/Developer/menxia-mcp/dist/index.js"] }
 ```
 
 **Do not use `npm link`.** Tripped on this on 2026-07-24 — global single pointer hijacked, causing a production rollback and half a day of cleanup. Operations resembling a global single pointer are strictly barred from this project.

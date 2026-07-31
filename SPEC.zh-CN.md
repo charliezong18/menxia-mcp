@@ -4,7 +4,7 @@
 
 设计定稿 · 2026-07-28
 
-配套产品：[`charliezong18/zhupi`](https://github.com/charliezong18/zhupi)（门下，人的一侧）。本仓是 agent 的一侧。
+配套产品：[`charliezong18/menxia`](https://github.com/charliezong18/menxia)（门下，人的一侧）。本仓是 agent 的一侧。
 
 ---
 
@@ -36,7 +36,7 @@
 
 - **画可（squash merge）不做工具。** 那是 Charlie 在门下上点的动作，agent 侧没有理由持有这个能力。
 - **交付后的记账不做工具**（tracker 编号、STATUS.md 在途表）——那些散落在不同 vault 位置，属于 skill 的散文职责，不适合固化成 schema。
-- **不改 zhupi 前端。** 本仓与 `charliezong18/zhupi` 只通过 GitHub（PR body 约定、`<!-- happy-session: -->` 标记格式）耦合，不共享代码。
+- **不改 zhupi 前端。** 本仓与 `charliezong18/menxia` 只通过 GitHub（PR body 约定、`<!-- happy-session: -->` 标记格式）耦合，不共享代码。
 
 ---
 
@@ -61,7 +61,7 @@ sessionId:  string?            覆盖用；不给则服务端自行探测，探�
 monolingual: boolean?          这折是单语读物，免双语对；登记进 docs/.monolingual
 ```
 
-返回：PR 号、PR URL、门下深链 `https://charliezong18.github.io/zhupi/?pr=<n>`、lint 报告。
+返回：PR 号、PR URL、门下深链 `https://charliezong18.github.io/menxia/?pr=<n>`、lint 报告。
 
 **`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
 
@@ -162,7 +162,7 @@ Node 20 + TypeScript，`@modelcontextprotocol/sdk`，stdio transport。
 MCP 配置里写绝对路径：
 
 ```json
-{ "command": "node", "args": ["/Users/charliezong/Developer/zhupi-mcp/dist/index.js"] }
+{ "command": "node", "args": ["/Users/charliezong/Developer/menxia-mcp/dist/index.js"] }
 ```
 
 **不用 `npm link`。** 2026-07-24 栽过——全局单指针被抢走，线上回退，收拾半天。全局单指针类操作一律不进这个项目。

@@ -3,10 +3,10 @@
 
 # zhupi-mcp
 
-**The agent-side of [the annotation desk (zhupi)](https://github.com/charliezong18/zhupi), built as an MCP server.**<br>
+**The agent-side of [the annotation desk (zhupi)](https://github.com/charliezong18/menxia), built as an MCP server.**<br>
 The annotation desk (zhupi) is where humans read long documents written by AI, highlight sentences, and leave comments. This repo is the other end of that loop: the set of tools used by the agent to submit a folder, read back comments, and reply to them one by one.
 
-[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi core](https://github.com/charliezong18/zhupi)
+[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi core](https://github.com/charliezong18/menxia)
 
 </div>
 
@@ -33,7 +33,7 @@ The gains on the submit a folder side are another matter: **the agent does not t
 
 Installation:
 ```json
-{ "mcpServers": { "zhupi": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
+{ "mcpServers": { "menxia": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
 ```
 Run `npm install && npm run build` first. Authentication borrows the existing `gh` on the machine, no need to configure a separate PAT.
 

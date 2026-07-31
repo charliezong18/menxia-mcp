@@ -137,7 +137,7 @@ describe('open_folder：整条链', () => {
 
     expect(out.pr).toBe(42);
     // 主输出是朱批台深链（2026-07-27：给 GitHub 链接会被读成「让你发朱批你却发了个 PR」）
-    expect(out.desk).toBe('https://charliezong18.github.io/zhupi/?pr=42');
+    expect(out.desk).toBe('https://charliezong18.github.io/menxia/?pr=42');
     expect(out.warnings).toEqual([]);
 
     // 分支真在 origin 上
