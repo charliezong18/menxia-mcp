@@ -161,3 +161,33 @@ describe('图落到哪个路径（第三轮：奏折仓真实布局是 docs/asse
     expect(assetTarget('/x/assets/old/assets/new/p.png')).toBe('docs/assets/new/p.png');
   });
 });
+
+// ── Phase 4 实机验收抓到的（2026-07-30）──
+
+describe('commentId 的上界不能跟折号共用（真 id 是 10 位数）', () => {
+  // 上一版 `commentId` 复用了折号那套校验（上界 1_000_000），于是 `reply_comment`
+  // **对任何真实批注 id 都会拒**，报的还是「pr 得是正整数」这种指错字段的话。
+  // 505 条单测一条没抓到 —— 它们全用 `commentId: 2` 这种小数字。
+  // 直到真 stdio 传输跑整轮时才炸出来（实测 id `3686996586`）。
+  it('真实形态的 10 位批注 id 收得下', async () => {
+    // 走到网络层才失败 = 校验放行了。校验不放行的话报的是「得是正整数」。
+    const e = await handleTool('reply_comment', { pr: 1, commentId: 3686996586, body: 'x' })
+      .catch((err: unknown) => err);
+    expect(String((e as Error).message)).not.toMatch(/得是正整数/);
+  });
+
+  it('折号仍然卡在 1e6 —— 那道闸是防科学计数法的，不能一起放宽', async () => {
+    await expect(handleTool('reply_comment', { pr: 1e21, commentId: 3686996586, body: 'x' }))
+      .rejects.toThrow(/pr 得是正整数/);
+  });
+
+  it('报错要指对字段', async () => {
+    await expect(handleTool('reply_comment', { pr: 1, commentId: -5, body: 'x' }))
+      .rejects.toThrow(/commentId 得是正整数/);
+  });
+
+  it('科学计数法那道闸在 commentId 上仍然有效', async () => {
+    await expect(handleTool('reply_comment', { pr: 1, commentId: 1e21, body: 'x' }))
+      .rejects.toThrow(/commentId 得是正整数/);
+  });
+});

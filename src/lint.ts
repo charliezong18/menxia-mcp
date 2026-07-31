@@ -1,6 +1,7 @@
 // 奏折体例检查的纯核。吃一份 Snapshot 吐 findings，**无 IO**。
 //
-// 规则以 `~/.claude/skills/review-loop/folder-lint.sh` 的**实现**为准，不以 SKILL.md 为准
+// 规则以 `folder-lint.sh` 的**实现**为准，不以 SKILL.md 为准
+// （老脚本 2026-07-30 退休，原件存档在本仓 `retired/folder-lint.sh`，行号引用仍可核）
 // （需求 R1；SPEC §5.1 查出过三处「文档说 A、代码做 B」）。
 //
 // 为什么吃「快照」而不是路径：规则一旦能读盘，「每条规则一个必失败用例」就要造 9 个

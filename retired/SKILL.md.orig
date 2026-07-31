@@ -1,0 +1,189 @@
+---
+name: review-loop
+description: 「御笔朱批」(zhupi) 阅读批注台的 agent 侧惯例——AI 长文档以 PR 形式呈进私有仓 charliezong18/review，Charlie 在 https://charliezong18.github.io/zhupi 里划句批注，agent 逐条回话改版，merge 定稿。Use when Charlie says 「发朱批」「呈朱批」「上朱批」「走 review」「发 review」「读批注」「收批注」「读朱批」「他批了吗」; when you finish a substantial standalone doc (spec / design doc / 对外 issue 草稿 / 研究报告 / 评审报告, ≥~400 字) — offer 「走朱批？」 once; or when handling review comments, replying to annotations, merging, or delivering docs in charliezong18/review. 关键词：朱批、御笔朱批、zhupi、奏折、总批、钦此、review-loop。
+---
+
+# review-loop：给「御笔朱批」呈奏折
+
+**先搞清名词**（其他 session 大概率没见过）：**朱批 / 御笔朱批 / zhupi** 是 Charlie 自建的阅读批注台（https://charliezong18.github.io/zhupi ，源码 repo `charliezong18/zhupi`）。它读**私有仓 `charliezong18/review` 的 open PR**，把 markdown 渲染出来给他划句批注。所以：
+
+> **「发朱批」= 把文档写成 `docs/<slug>.md`，在 `charliezong18/review` 开一个 PR。** 不是发到别的仓，不是开 issue，不是贴聊天里。开完 PR 它就自动出现在他的待批清单上。
+
+界面词 ↔ 技术底层：**奏折**=一个 PR 里的文档 / **朱批**=inline review comment（锚在某行） / **总批**=conversation comment（整折总评） / **钦此**=squash merge=定稿 / **待批清单**=open PR 列表 / **已钦此**=归档（merged，只读）。
+
+# 批注循环
+
+Charlie review AI 长文档的姿势不是聊天流，是 PR 式 batch review：draft 进来 → 他一口气读完、留 inline 批注 → agent 改版逐条回复 → 几轮后 merge 定稿 → 交付目的地。工作台 = 私有 repo `charliezong18/review`（本地 `~/Developer/review`）。试点期到 **2026-08-08**（判据见 repo `STATUS.md`），到期三选一：继续白嫖 GitHub / 按 `PAIN.md` 自建阅读器 / 砍掉。
+
+## 触发（opt-in）
+
+- 写完一篇正式交付物（spec、design doc、对外 issue/PR 文案、研究报告，≥~400 字或明显要多轮改）→ 问一句「走 review？」，同一篇只问一次。
+- Charlie 说「发 review」= 直接走，不问。
+- 聊天里的小改动、快问快答不进 repo。
+
+## 什么该走朱批（2026-07-29 收紧）
+
+**要 Charlie 读的、要他批准的，一律进朱批。不贴聊天，也不再问「要不要走朱批」——默认就走。**
+判据是「他需要读进去并给出判断吗」，**不是字数**。requirements / design / spec / 提案 / 调研报告 /
+评审报告 / 对外草稿全都算。此前「≥400 字 offer 一次」的写法作废——实测那一问只是多一次往返，
+而贴聊天等于剥夺了划句批注、攒批一次提交、批注串可回溯这三样朱批存在的全部理由。
+
+不走朱批的：一两句话的结论、命令输出、进度汇报、需要立刻答复的短问题。
+
+## 奏折体例（input model v1）—— 每一折都必须满足
+
+2026-07-28 立此定式。**在此之前体例只写在散文里，实测漏得很厉害**：八折漏三折的「回奏对」标记、十一篇缺双语对、有分支从别的未合分支切出去、把别人没批的稿子夹带进 main。结论是**文档提醒治不了漏执行，只有闸门能**，所以下面每一条都有脚本查。
+
+| # | 硬性要求 | 谁来查 |
+|---|---|---|
+| 1 | **双语一对**：`docs/<slug>.md` 放英文，`docs/<slug>.zh-CN.md` 放中文。**先判原文语言再定方向**——对外草稿本来就是英文，缺的是中文版，反了就白翻 | `folder-lint.sh` |
+| 2 | **互链头**：英文版首行 `**English** · [中文](<slug>.zh-CN.md)`；中文版首行 `[English](<slug>.md) · **中文**`。zhupi 的语言切页靠它认对子，写错就切不过去 | `folder-lint.sh` |
+| 3 | **图一起搬**：正文引用的 `assets/**` 必须真在仓里，否则他读到断图 | `folder-lint.sh` |
+| 4 | **分支从最新 main 切**：从别的未合分支切会把对方的稿子夹带进 main（#8/#9 栽过） | `folder-lint.sh`（警告 + 列出"已在 main 上"的文档） |
+| 5 | **PR body 五段**：目的地 / 直达链 / TLDR / 待你拍板 / 怎么用 | `open-folder.sh`（**只警告不拦**——2026-07-28 Charlie 拍板照代码来，此前本表和脚本注释都写「拦」，是假的） |
+| 6 | **回奏对标记**：body 末尾 `<!-- happy-session: … -->` | `open-folder.sh` 焊死 |
+| 7 | **不许 draft**：draft 挡住「钦此」的 squash merge | `audit-folders.sh --fix` |
+
+```bash
+~/.claude/skills/review-loop/folder-lint.sh [工作树]   # 呈折前自查（open-folder 会自动跑）
+~/.claude/skills/review-loop/audit-folders.sh [--fix]  # 存量巡检，--fix 补标记与 draft 转正
+```
+
+**上面这些治的是「走了这条路会不会做对」，治不了「压根不走这条路」。** 所以 2026-07-28 加了第八道闸：
+`guard-pr-create.sh`（挂在全局 settings.json 的 `PreToolUse(Bash)`）**直接拒绝**对奏折仓的裸 `gh pr create`
+和 `gh api -X POST .../pulls`——不管是 `-R` 点名的，还是 `cd` 进奏折仓工作树后不带 `-R` 的。
+读操作（`pr view` / `pr list` / GET pulls）和别的仓一概不拦。
+
+判「是不是真要建 PR」看的是**命令段首**（剥掉 env 赋值、`bash -c` 包壳、绝对路径后必须以 `gh` 打头），
+所以 `git commit -m "…gh pr create…"`、`echo`、`grep` 提到它都不会被误拦。
+改守卫前先跑 `guard-pr-create.test.sh`（21 条用例）。
+
+2026-07-29 加了**第九道闸**：`guard-closed-folder.sh`（同挂 `PreToolUse(Bash)`）**拒绝往已钦此 / 已关闭的折上写**——
+`git push` 到已合分支、`gh pr comment/edit` 已关折、`gh api POST` 回话到已关折，一律拦下并提示另开一折。
+只读操作（`pr view --comments`、GET comments）和别的仓不受影响。测试 `guard-closed-folder.test.sh`（26 条用例，
+gh/git 全打桩，不碰网络）。
+两个守卫分工：**guard-pr-create 管路由**（走没走闸门），**guard-closed-folder 管时序**（折还活着吗）。
+
+## 创建一篇
+
+```bash
+cd ~/Developer/review && git checkout main && git pull -q
+git checkout -b <slug>      # 并行 session 各开临时 worktree，别共用 ~/Developer/review
+# 写 docs/<slug>.md（英文）+ docs/<slug>.zh-CN.md（中文），带互链头
+# 正文只放 artifact 本身（将来原样发出去的内容），一次性元数据（目的地/直达链/怎么用）放 PR body
+# 但**折级、要留档的**元数据写进正文（见下「四条硬约定」②）——朱批台不渲染 PR body
+git add docs/ && git commit && git push -u origin <slug>
+gh pr create --title "<类型>：<标题>" --body "<按模板>"
+```
+
+（2026-07-26 起**弃用 `--draft`**：私有单人仓里 draft 挡不住任何人，却挡住 merge——朱批 app 的「钦此」按钮要能直接 squash merge。存量 draft 折用 `gh pr ready <n>` 转正。）
+
+PR body 五段模板：**目的地**（merge 后交付到哪）/ **渲染版**（`https://github.com/charliezong18/review/blob/<branch>/docs/<slug>.md`，markdown 渲染态，读它舒服；批注仍回 Files changed 的 diff 上划行）/ **TLDR** / **待你拍板**（编号列出）/ **怎么用**（提醒批注完说「读批注」）。建完**只给朱批台深链 `https://charliezong18.github.io/zhupi/?pr=<n>`，别甩 github.com 的 PR 链接**——PR 只是奏折的载体，他要的是能划句批注的那个界面；给 GitHub 链接会读成「让你发朱批你却发了个 PR」（2026-07-27 踩过）。多篇并行各开各的分支；开新篇必须从最新 main 切。
+
+**body 末尾必须埋一行「回奏对」标记**——Charlie 批完要回来找呈折的这个 session 说「读批注」，靠它认路（朱批据此渲染「回奏对」按钮）。
+
+**用 `open-folder.sh` 开折，别手写 `gh pr create`**——标记焊死在创建动作里，还会自核标记真落进了 body，末尾直接吐深链：
+
+```bash
+~/.claude/skills/review-loop/open-folder.sh "<类型>：<标题>" /tmp/body.md
+```
+
+（2026-07-28 立此脚本：标记原本是"开完 PR 再记得 append"，八折漏了三折 #11 #16 #17——全是漏执行不是 bug。文档写了照样能跳过，所以焊进动作本身。拿不到 id 时脚本会警告并省掉这行，按钮不出现而已，**别编一个**。）
+
+## 读批注（口令「读批注」，不带编号 = 扫全部 open PR）
+
+**第 0 步永远是查状态**，别跳：
+
+```bash
+gh pr view <n> -R charliezong18/review --json state --jq .state
+```
+
+`MERGED` / `CLOSED` 就**别再动那条分支**——推上去不改变 main，回话落在没人看的已关页面。命令全部「成功」而结果是零，他看到的仍是旧版，于是他的反馈会指向一个你以为不存在的问题。要补内容一律**另开一折**。
+
+（2026-07-29 #23 实测：他说「批完了」时折已 merged，agent 照常改稿推分支回话，全部石沉大海；他反馈「没有图」被误读成渲染问题，白绕一大圈。`guard-closed-folder.sh` 现在会拦，但那是网兜不是流程——先查。）
+
+```bash
+gh pr list -R charliezong18/review --state open --json number,title,headRefName
+gh api repos/charliezong18/review/pulls/<n>/comments        # inline 批注（id/path/line/body/in_reply_to_id）
+gh pr view <n> -R charliezong18/review --comments            # 会话区留言
+```
+
+Charlie 在会话区整条列意见（不划行）也算批注，照单处理。没有我方 reply 的 inline 批注 = 未处理。逐条改 `docs/<slug>.md`，commit + push 出 v2，然后**每条批注必回一句**处理方式（采纳 / 部分采纳+理由 / 不改+理由）：
+
+```bash
+# 回某条 inline 批注。**首行必须以 `**回话**` 开头，同一行接正文**——见下
+gh api -X POST repos/charliezong18/review/pulls/<n>/comments/<comment_id>/replies \
+  -f body='**回话** 采纳，已改。具体是……'
+```
+
+### 四条硬约定（2026-07-29 立，review#29）
+
+**① 别往会话区发折级小结。** 「v2 已呈 —— 逐条回…」这种**在聊天里说**，不发成总批。
+Charlie 明确说他不在朱批台读那些小结，只看聊天。历史上往会话区发小结是 agent 自己长出来的行为，
+本文件从来没要求过。
+
+**这条现在有闸门**：`guard-reply-body.sh` 直接拒掉往奏折仓 `issues/<n>/comments` 的 POST。
+上一版只写在这里，实测立规第二天（2026-07-30）#30 上还在发，
+16 个 open 折 13 条 `needsReply` 里 **7 条是 agent 自己的话**（多报 77%）。
+而清掉它们的唯一手段是 `mark_handled` 的 `seed`，那是全系统最危险的操作 ——
+不焊上游就等于逼下游用危险工具收拾。
+
+**② 要留档的折级元数据写进文档正文，不写聊天、也别只放 PR body。** 区别在读者：
+小结的读者是**此刻的 Charlie**（聊天够了）；元数据的读者是**以后打开这折的人**——
+可能是另一个 session，也可能是三周后的他。典型例子是「归并说明：我在另一个 session 里
+重复呈了同一篇」这种。聊天是错的家（会话作用域、从折上搜不到），而**朱批台不渲染 PR body**
+（`ui.js:93` 只 `parseHappySession(pr.body)`，从不显示它），所以折内唯一看得见的落脚点是正文。
+
+**双语对怎么处理**：中英各写一份（体例第 1 条要求每折双语一对）。归并/作废这类
+一两句话的说明放在**文首引用块**里，跟着互链头。
+上面 :73 那条「元数据一律放 PR body」指的是**一次性的**导航信息（目的地 / 直达链 / 怎么用）——
+那些看一次就完了，不用留档。要留档的按本条走。
+
+**③ inline 回话首行盖 `**回话**`。** 你和 Charlie 共用同一个 GitHub 账号，
+你的回话和他从 GitHub 网页在串里追的话在 API 里**完全同形**（都是空 body review）。
+盖了这个前缀，`zhupi-mcp` 才能把这串从 `counts.unclear`（判不了）挪进「确定已回」——
+判据是 `threads.ts` 的 `isOurReply()`，真的在读它（2026-07-29 补上；在那之前
+这条约定的因果是**我编的**，没有任何代码读前缀，第一轮评审抓到）。
+前缀是**可见**的，所以不需要任何剥离。
+
+**写法：同一行，别空行。** 朱批台自己已经给每条回话打了 `回话 · <login>` 标签
+（`cards.js:45-49`），reply 正文又走 markdown 渲染 —— 写成 `**回话**\n\n正文`
+会渲染出独占一行的加粗「回话」，在他 300px 宽的批注栏里是三层重复
+（标签 / 前缀 / 你本来就爱用的 `**采纳，……**` 判词）。第三轮评审实测。
+
+**这条现在有闸门**：`guard-reply-body.sh` 会拒掉没盖前缀的回话（自验 21 例）。
+上一版只写在这份文件里，实测**全仓 12 条回话 0 条带前缀** —— 散文治不住。
+
+**④ 处理完他的总批，调 `mark_handled` 记一笔。**
+总批的「已处理」状态记在 agent 本地（`~/.zhupi-mcp/processed.json`），不写 GitHub——
+因为写进 GitHub 的标记在共享账号下一律退化成靠约定（三版方案死在这上面）。
+**不记就会一直挂在 `needsReply` 里。** 漏记的失效方向是多报（良性）。
+
+用它之前先知道三件事：
+
+- **`ids` 从 `read_comments(pr).conversation[].id` 来。** 记的是 id + 当时的修改时间，
+  所以他之后原地编辑那条总批，它会自动重新变 pending。
+- **你自己历史上发的总批也会显示 `pending`** —— 共用账号，API 分不出来。这是**多报**，正常。
+  看 `attention` 里的 preview 就能分辨（「## v2 已呈 ——」显然是你自己的）。
+- **清积压用 `seed`，但它是两步。** 不带 `confirm` 只返回「将要标掉什么」；
+  **必须逐条看 preview** ——`fromDesk: true` 的那些是**他的朱批**（zhupi 锚不到行时会并入总批），
+  标掉等于让他的话从所有输出里消失（评审在 #9 上实测过一次）。标错了用 `undo: true`。
+- **钦此不会清掉它。** merge 只是让它掉出默认的 `state=open` 列表；
+  `list_folders({state:'merged'})` 仍然报 pending。
+
+改完告诉 Charlie：v2 好了 + 各点怎么处理的一句话汇总。
+
+## merge = 定稿 → 交付
+
+- Charlie 自己点 merge，或口头说 merge（执行 `gh pr merge <n> --squash --delete-branch -R charliezong18/review`）。
+- merge 后按 PR body 声明的目的地交付：进 vault 的直接写；**对外的（真 issue、邮件、公开 repo）发出前仍报一句目的地确认**——全文不重贴（PR 审读已算全文过目），但要等 Charlie 一个「发」字。
+- 交付完收尾：该记的编号/链接记到对应 tracker，`STATUS.md` 在途表移出 + 日志加一行。
+
+## 授权边界
+
+本 repo 内 commit / push / 开 PR / 回 comment /（Charlie 指令后的）merge 已获默认授权，不逐次确认。对外发布照旧硬闸（[[feedback-confirm-before-publish-git-content]]）。
+
+## 顺手维护
+
+- Charlie 抱怨读着难受（「表格没法看」「diff 里读不动」）→ repo `PAIN.md` 追加一行：`日期 | PR | 具体瞬间`。这是未来自建阅读器的需求收集，别漏记。
+- 文档进出 → `STATUS.md` 在途表；实质进展 → 养 dashboard 卡 `Hang/Dashboard/AI产出Review台.md`。

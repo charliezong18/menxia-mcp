@@ -67,16 +67,17 @@ export const TOOLS = [
       '查一折的**体例**（不是内容）：双语对齐不齐、互链头对不对、有没有断图、语言方向反没反、分支基点。\n' +
       '**只读本地 git 工作树，不打 GitHub。**\n' +
       '两个调用方共用这一个核（需求 R7）：\n' +
-      '· 呈折前自查 —— 不传 ref，查当前分支相对 origin/main 的新增/修改文档（**但真拦你的是 open-folder.sh**）\n' +
+      '· 呈折前自查 —— 不传 ref，查当前分支相对 origin/main 的新增/修改文档（**但真拦你的是 open_folder**）\n' +
       '· 存量巡检 —— 传 `ref: "origin/<分支名>"` 逐折查，不用 checkout\n' +
       '返回 findings[]，每条带 `severity`：`hard` = 呈折会被拦；`warn` = 提醒，不阻断。\n' +
       '**警告不等于没事**：语言方向（规则 5）是警告，但整篇翻反了也只报警告 —— ' +
       '阈值 30% 没在真实语料上量过，先看误报率再考虑升级（design D5）。\n' +
       '注意它查的是**已提交**的内容；未提交的改动会在 `dirtyDocs` 里列出来。\n' +
-      '「回奏对标记」和「draft 状态」不在这里 —— 那两条要打网络，归 Phase 3。\n' +
-      '**这个工具只读只报，拦不住任何东西。** 真闸门是 `open-folder.sh`（呈折的唯一正路）；' +
-      '这里的 `hard` 只表示「走那条路会被拦」，不表示本次调用拦了什么。' +
-      '也就是说它属于「agent 记得调才生效」那一类 —— 而那正是这个项目量出 37.5% 漏执行率的机制。',
+      '「回奏对标记」和「draft 状态」不在这里 —— 那两条要打网络，归 audit_folders。\n' +
+      '**这个工具只读只报，拦不住任何东西。** 真闸门在 `open_folder` 里面（它自己会跑这一套，' +
+      '不合格卡在 push 之前）；这里的 `hard` 只表示「呈折时会被拦」，不表示本次调用拦了什么。' +
+      '也就是说它属于「agent 记得调才生效」那一类 —— 而那正是这个项目量出 37.5% 漏执行率的机制。' +
+      '**所以别把它当闸门用**：真要保证不出错就直接 open_folder，让它拦。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -213,17 +214,40 @@ function parseState(raw: unknown): State {
   });
 }
 
-function parsePr(raw: unknown): number | undefined {
+/**
+ * 正整数入参的统一校验。
+ *
+ * 严格判类型：v1 用 Number() 强转，实测 "3" / [3] / true 全被接受（分别 → 3、3、1），
+ * 与 inputSchema 声明的 type:integer 矛盾。
+ *
+ * **上界的理由是科学计数法，不是「数字不能太大」。** `Number.isInteger(1e21)` 为真，
+ * 而 `String(1e21) === '1e+21'`，GitHub 按 to_i 解析成 1 —— 不报错，**返回另一个东西**
+ * （第三轮评审实证）。所以上界只要卡在「不会被格式化成科学计数法」即可。
+ *
+ * **`field` 与 `max` 必须分开传**（2026-07-30 Phase 4 实机验收血的教训）：
+ * 上一版 `reply_comment` 的 `commentId` 直接复用了折号那套（上界 1_000_000），
+ * 而 GitHub 的批注 id 是 **10 位数**（实测 `3686996586`）—— 于是这个工具
+ * **对任何真实批注 id 都会拒**，报的还是「pr 得是正整数」这种指错字段的话。
+ * 505 条单测一条都没抓到，因为它们全用 `commentId: 2` 这种小数字。
+ * 这就是「走完整整一轮」这条判据存在的全部理由。
+ */
+function parseId(raw: unknown, field: string, max: number): number | undefined {
   if (raw === undefined || raw === null) return undefined;
-  // 严格判类型：v1 用 Number() 强转，实测 "3" / [3] / true 全被接受（分别 → 3、3、1），
-  // 与 inputSchema 声明的 type:integer 矛盾。
-  // 上界也要卡：Number.isInteger(1e21) 为真，而 String(1e21) === '1e+21'，
-  // GitHub 按 to_i 解析成 1 —— 不报错，**返回另一折**（第三轮评审实证）。
-  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 1_000_000) {
-    throw new ZhupiFailure({ kind: 'badInput', what: `pr 得是正整数，收到 ${JSON.stringify(raw)}` });
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > max) {
+    throw new ZhupiFailure({ kind: 'badInput', what: `${field} 得是正整数（≤ ${max}），收到 ${JSON.stringify(raw)}` });
   }
   return raw;
 }
+
+/** 折号。四位数都嫌多，1e6 足够且远离科学计数法。 */
+const parsePr = (raw: unknown): number | undefined => parseId(raw, 'pr', 1_000_000);
+
+/**
+ * GitHub 的 comment / review id。实测是 10 位数，留足余量到 `MAX_SAFE_INTEGER`
+ * —— 那已经是 9e15，仍然远小于会被格式化成 `1e+21` 的门槛。
+ */
+export const parseCommentId = (raw: unknown): number | undefined =>
+  parseId(raw, 'commentId', Number.MAX_SAFE_INTEGER);
 
 /**
  * ids 逐个严格校验。
@@ -448,7 +472,7 @@ export async function handleTool(
         hint: '省掉它以前是「发总批」，那条路已经关了：折级小结在聊天里说，要留档的元数据写进 docs/<slug>.md 正文。',
       });
     }
-    const commentId = parsePr(args.commentId);
+    const commentId = parseCommentId(args.commentId);
     if (typeof args.body !== 'string' || !args.body.trim()) {
       throw new ZhupiFailure({ kind: 'badInput', what: 'body 得是非空字符串' });
     }
