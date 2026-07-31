@@ -103,7 +103,7 @@ Wrong in both directions. Inherited from the old script; fixing it widens scope.
 a nested list, or `<!-- ![x](assets/y.png) -->`, both read as real references. The "a document
 about lint rules cannot pass lint" case history is only half closed.
 
-**⑤ The submission gate guards against slips, not against going around it.** The first review
+**⑤ The submission gate guards against slips, not against going around it. — measured 2026-07-31; not doing it for now, reasoning below.** The first review
 round measured six bypasses: wrapping in a script, `xargs`, `eval`, python `subprocess`,
 `git push` plus creating the PR in the web UI, and any non-Claude-Code runtime (agy, a plain
 terminal). The three PreToolUse hooks only attach to Claude Code's Bash tool; no amount of
@@ -112,3 +112,17 @@ added patterns closes this layer.
 The only real closure is to **move the criterion into the repo** (CI on main validating the
 format of every PR). That is Phase 3/4 scope, and it needs Charlie's sign-off first — adding CI
 changes how submission feels to him.
+
+**Talked it through 2026-07-31. Verdict: not yet.** Three numbers, each pointing the same way independently:
+
+| What was measured | Result |
+|---|---|
+| Did anyone actually go around it | **0/18** — every open folder carries the return-to-session marker, i.e. all went the proper route. Those 6 bypass routes are reasoned, not observed |
+| How much house style actually drifted | 17/18 clean, and the single hit was a **false positive** (#31 should have had the monolingual exemption) |
+| Does the annotation desk show check status | **No.** Across zhupi's 23 source files, `check_run` / `checkSuite` / `statuses` / `mergeable_state` all return zero hits |
+
+The third is decisive: a required check would **light up red where he cannot see it, then block the one button he cares about (钦此)** — invisible signal plus blocking action. Advisory would just be a red X nobody reads.
+
+**And that single red exposed a different, real debt**: the `docs/.monolingual` exemption had never once been usable (a file inside the repo, and `open_folder` had no path that could create it), so #31 reported 22 false hard findings for its whole life. **A check that starts reporting false red is a check people learn to ignore** — that is killing this gate more concretely than any bypass. Fixed (`open_folder`'s `monolingual` flag, plus a one-off registration for #31); the sweep is now 19/19 clean.
+
+**Reopening criteria**: the first real bypass (an open folder with no return-to-session marker), or `audit_folders` reporting drift that is not a false positive. Until then detection belongs to `audit_folders()` — same core, sweeps every open folder, never touches the merge path.
