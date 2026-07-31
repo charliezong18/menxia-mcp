@@ -149,17 +149,28 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
 export const REPLY_PREFIX = '**回话**';
 
 /**
- * 首行是块级构造吗（围栏 / 标题 / 列表 / 引用 / 表格 / 有序列表）。
+ * 首行（连带第二行）会不会让 `**回话** ` 前缀毁掉块级渲染。
  *
  * 第三轮跨系统评审 2026-07-30 抓到：zhupi 把 reply 正文整个过 markdown-it
  * （`cards.js:48` `renderMarkdown(r.body)`，`render.js:2` `markdownit({ html: false, … })`），
  * 所以 `**回话** ` + 一行围栏会被读成**行内 code span** —— 代码块整段糊成一段话。
  * 老守卫的做法是**拒绝**（让 agent 自己改写），方向是安全的；焊死的做法必须自己处理这一类。
  *
+ * 三类首行会被前缀毁掉，走独占一段：
+ *   1. 首行**自身**就是块级起手（围栏 / 标题 / 列表 / 引用 / 表格 / 有序列表）。
+ *      CommonMark 容块级起手带 0–3 空格缩进（4 起才是 ② 的代码块），判定也得容 ——
+ *      只剥空行之后若锚死列 0，`  > 引文` 这类会漏进同一行路径（Fable 复审抓的回归）。
+ *   2. 首行缩进 ≥4 空格或 Tab —— 那是缩进代码块；`**回话** ` 顶掉缩进，代码块塌成普通句。
+ *   3. **setext 标题**：首行是普通文字、**第二行**是 `===` / `---` 下划线 —— 前缀焊在首行上，
+ *      整行连同 `**回话**` 被渲成 H1/H2。这一类**必须看第二行**才认得出，单看首行会漏。
+ *
  * 老实说：现存 18 条回话里**首行是块级构造的有 0 条**，这条是预防不是在修已发生的事故。
  * 但焊死这个动作本身把「agent 自己改写」那一步拿掉了 —— 拿掉之后就得自己接住。
  */
-const startsBlock = (line: string): boolean => /^(```|~~~|#{1,6}\s|[-*+]\s|>\s|\d+[.)]\s|\|)/.test(line);
+const startsBlock = (first: string, second: string): boolean =>
+  /^ {0,3}(```|~~~|#{1,6}\s|[-*+]\s|>\s|\d+[.)]\s|\|)/.test(first) // ① 围栏/标题/列表/引用/表格/有序（容 0–3 空格缩进）
+  || /^( {4}|\t)/.test(first)                                      // ② 缩进代码块（≥4 空格 / Tab）
+  || (first.trim() !== '' && /^ {0,3}(=+|-+)\s*$/.test(second));   // ③ setext：下一行是 === / ---
 
 /**
  * 首行盖 `**回话**`（硬约定③）。**默认同一行，别空行。**
@@ -177,13 +188,20 @@ const startsBlock = (line: string): boolean => /^(```|~~~|#{1,6}\s|[-*+]\s|>\s|\
  * （旧注释写的「12 条 0 条带前缀」是守卫上线前的快照，别再引用那个数。）
  */
 export function withReplyPrefix(body: string): string {
-  const text = body.replace(/^\s+/, '');
-  if (text.startsWith(REPLY_PREFIX)) return text;
+  // **只剥前导空行，不剥首个内容行的缩进。** 上一版一句 `^\s+` 把两者一起吃了 ——
+  // 于是缩进代码块的前导 4 空格被顺手抹掉，代码块在判定之前就已经塌成散文，
+  // 「另起一段」也救不回来。分两步：先去掉整行空行，块级判定对着**留着缩进**的文本做；
+  // 只有确认走同一行（普通散文）时，才把首行那点无意义缩进（<4 空格）也去掉。
+  const dedented = body.replace(/^(?:[ \t]*\r?\n)+/, '');
+  const trimmed = dedented.replace(/^[ \t]+/, '');
+  if (trimmed.startsWith(REPLY_PREFIX)) return trimmed;
   // 首行是块级构造时前缀另起一段。**这时候独占一行是对的** ——
   // 「别空行」那条讲的是排版重复（300px 栏里三层「回话」），
   // 而这里的代价是把他要读的代码块毁掉，两害相权很清楚。
-  if (startsBlock(text.split('\n')[0] ?? '')) return `${REPLY_PREFIX}\n\n${text}`;
-  return `${REPLY_PREFIX} ${text}`;
+  // setext 要看第二行、缩进代码块要看首行缩进，都得对着没剥缩进的 dedented 判。
+  const lines = dedented.split('\n');
+  if (startsBlock(lines[0] ?? '', lines[1] ?? '')) return `${REPLY_PREFIX}\n\n${dedented}`;
+  return `${REPLY_PREFIX} ${trimmed}`;
 }
 
 export interface ReplyInput {
