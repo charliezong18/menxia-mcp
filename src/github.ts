@@ -47,7 +47,7 @@ export function installReadOnlyGate(oc: Octokit): Octokit {
   oc.hook.wrap('request', async (request, options) => {
     const method = String(options.method ?? '').toUpperCase();
     if (method !== 'GET') {
-      throw new Error(`zhupi-mcp 是只读的，拦下了一个 ${method} 请求：${String(options.url)}`);
+      throw new Error(`menxia-mcp 是只读的，拦下了一个 ${method} 请求：${String(options.url)}`);
     }
     return request(options);
   });
