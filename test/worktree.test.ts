@@ -98,6 +98,29 @@ describe('锁：崩溃后不能死锁（O_EXLOCK 在 Node 25 上不存在，这�
     release();
   });
 
+  // 陈旧阈值必须**从 git 超时预算推导、判定时现算**，不能是写死的 5 分钟。
+  // 反例（旧实现，STALE_MS = 300_000）：一次慢 push 合法持锁能到 ~540s（fetch/commit/push
+  // 各自可吃满超时），却在 300s 就被判陈旧、锁被抢走 —— 正是这把锁该防的事。
+  // 这条把 ZHUPI_GIT_TIMEOUT_MS 调大，断言一把「按旧 5 分钟早就算老」的活锁**不被抢**：
+  //   阈值 = max(600s, 3×gitTimeout + 60s)，gitTimeout=5min 时 = 960s，350s 的锁还很新。
+  it('陈旧阈值随 ZHUPI_GIT_TIMEOUT_MS 涨 —— 超时调大后，按旧 300s 早该算老的活锁不被抢', async () => {
+    const path = lockPath();
+    const prev = process.env.ZHUPI_GIT_TIMEOUT_MS;
+    process.env.ZHUPI_GIT_TIMEOUT_MS = String(5 * 60_000); // 单次 git 超时 5 分钟 → 阈值 960s
+    // 锁的岁数 = 350s：越过旧的 300s，但远没到新阈值 960s。pid 还活着。
+    writeFileSync(path, JSON.stringify({ pid: process.pid, at: Date.now() - 350_000 }));
+    try {
+      // 抢不到就会等到超时报「另一个会话」—— 那正是「没被判陈旧」的证据。
+      await expect(acquireLock({ lockPath: path, timeoutMs: 500, isAlive: () => true }))
+        .rejects.toThrow(/另一个会话/);
+      // 锁原样还在，pid 没被换（没发生 rename-aside 抢锁）。
+      expect((JSON.parse(readFileSync(path, 'utf8')) as { pid: number }).pid).toBe(process.pid);
+    } finally {
+      if (prev === undefined) delete process.env.ZHUPI_GIT_TIMEOUT_MS;
+      else process.env.ZHUPI_GIT_TIMEOUT_MS = prev;
+    }
+  });
+
   // 变异战役（2026-07-30）里「拿到后不回读确认」**原样存活** —— 那句防御当时是零覆盖的。
   // 它防的是文件头写的残留竞态：A 读到陈旧锁 → C 抢先拿锁 → A 把 C 的新锁挪走。
   // 微秒级窗口靠并发跑撞不出来，所以开了 onCreated 这个接缝，直接把那一手插进去。
@@ -307,6 +330,29 @@ describe('锁的两条竞态（评审推演出来的，不是撞出来的）', (
     release();
     expect(existsSync(path), '别人的锁被我删了').toBe(true);
     expect((JSON.parse(readFileSync(path, 'utf8')) as { pid: number }).pid).toBe(424242);
+  });
+
+  // 释放侧的 check-then-act 残留子窗（文件头 ② / SPEC「释放前确认锁还是自己的」那行）。
+  // 上一条覆盖的是「回读时锁已经是别人的」—— 那种情况能挡住。但抢锁若恰好落在
+  // 「回读确认是自己的」与「rmSync」**之间**，就挡不住了。这条用 onBeforeRelease
+  // 把 B 的抢锁精确插进那道缝里，钉住**当前行为**（记录而非断言已消除）：
+  // 此刻 B 的新锁会被删掉。文件头把这个亚微秒窗口列为接受残留 —— 前提是本会话已经
+  // 过龄到被判陈旧（`staleMs()` 把阈值抬到远超合法持锁，正是为了让这一步近乎不可达），
+  // 且真撞了仓 git 的 ref 锁会明着报错兜底。这条测试是那份契约的存证。
+  it('回读之后、删除之前被抢 —— 当前行为是删掉抢方的新锁（文件头 ② 记录在案的残留）', async () => {
+    const path = lockPath();
+    const release = await acquireLock({
+      lockPath: path,
+      timeoutMs: 2_000,
+      // 精确落在回读（已确认是自己的）与 rmSync 之间：B 此刻完成抢锁并建了自己的新锁。
+      onBeforeRelease: () => {
+        writeFileSync(path, JSON.stringify({ pid: 424242, at: Date.now() }));
+      },
+    });
+    release();
+    // 当前行为：B 的新锁被删。若哪天把释放侧也改成 rename-aside 收口，这条会翻红，
+    // 提醒同步改文件头 ② 与 SPEC 那行 —— 那正是它存在的意义。
+    expect(existsSync(path), 'onBeforeRelease 注入的抢方新锁在删除窗口内被删掉').toBe(false);
   });
 
   // B 判定陈旧 → B 被调度走 → A 判定陈旧、抢锁、建新锁、回读确认，进临界区

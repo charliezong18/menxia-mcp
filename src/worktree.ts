@@ -17,10 +17,14 @@
 // 改成：`O_EXCL` 原子创建锁文件 + 里面记 pid/时间 + 三条判活。
 // 崩溃后不死锁靠的是判活，不是靠内核放锁 —— 这一条必须有测试真 kill 一个进程来证。
 //
-// 残留竞态（写下来，不假装没有）：A 读到陈旧锁 → C 抢先拿到新锁 → A 把 C 的新锁挪走。
-// 窗口是微秒级，且 A 与 C 都会在拿锁后**回读确认锁里是自己的 pid**，被挪走的一方
-// 会重新排队。最坏结果是两个 git 操作撞上，git 自己的 index/ref 锁会明着报错，
-// 不是静默串仓。
+// 残留竞态（写下来，不假装没有）：有两个微秒级子窗，都靠同一条兜底收口 ——
+//   ① 抢锁侧：A 读到陈旧锁 → C 抢先拿到新锁 → A 把 C 的新锁挪走。A 与 C 都会在拿锁后
+//     **回读确认锁里是自己的 pid**，被挪走的一方会重新排队。
+//   ② 释放侧：A 持锁过龄被 B 判陈旧、抢走并建了新锁；A 的 release 在「回读确认锁是自己的」
+//     与「rmSync 删掉它」之间被调度走，醒来时把 **B 的新锁**删掉。前提是 A 已经过龄
+//     （没过龄 B 根本不会来抢），所以把陈旧阈值抬到远超合法持锁（见 `staleMs()`）本身
+//     就把这个窗口压到近乎不可达；剩下的残留与 ① 同口径接受。
+// 两者最坏结果都一样：两个 git 操作撞上，git 自己的 index/ref 锁会明着报错，不是静默串仓。
 
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync,
@@ -39,8 +43,34 @@ import { fail, isFailure } from './errors.js';
  */
 export const lockPathDefault = (): string =>
   process.env.ZHUPI_LOCK_PATH ?? `${process.env.HOME ?? tmpdir()}/.zhupi-mcp/review.lock`;
-/** 超过这个岁数的锁一律当陈旧。临界区是秒级的，五分钟是极宽松的上界。 */
-export const STALE_MS = 5 * 60_000;
+/**
+ * 每次 git 子调用的超时预算（毫秒）。env 可覆盖是测试接缝（真正用它的地方见 `git()`）。
+ * 单拎成函数是因为**陈旧阈值 `staleMs()` 要从它推导** —— 两个数各写各的迟早漂移。
+ */
+export const gitTimeoutMs = (): number => Number(process.env.ZHUPI_GIT_TIMEOUT_MS) || 180_000;
+
+/**
+ * 超过这个岁数的锁才当陈旧、可抢。**这是从 git 超时预算推出来的下界，不是拍脑袋的五分钟。**
+ *
+ * 上一版写死 `5 * 60_000`，注释还说「临界区是秒级的」—— 那句话错了：`stageFolder`
+ * 全程持锁跨 fetch → commit → push，每个 git 子调用各自可阻塞到 `gitTimeoutMs()`
+ * （默认 180s，慢网络的 push 真能吃满）。一次合法持锁里最坏 ≈ 3× 单次超时 ≈ 540s，
+ * **已经越过旧的 300s**。后果正是这把锁存在的意义所反的：一个正在慢 push 的活会话
+ * 被判陈旧、锁被别人抢走 —— 两个 git 操作同时进临界区，恰好在最需要锁的时候。
+ *
+ * 所以阈值 = 3×（单次 git 超时）+ 60s 余量，且不低于 600s 硬底
+ * （3× 是因为一次持锁里真能吃满超时的 git 调用就 fetch / commit / push 这三步；
+ * 硬底防的是有人把 `ZHUPI_GIT_TIMEOUT_MS` 调得极小，短超时不该让锁变得好抢）。
+ * **必须在判定时现算**（line 135 调 `staleMs()`，不是模块常量）：超时预算一旦调大，
+ * 陈旧阈值要跟着涨，否则调大超时就把这个洞又开回来了。
+ */
+export const staleMs = (): number => Math.max(600_000, gitTimeoutMs() * 3 + 60_000);
+
+/**
+ * @deprecated 判定一律用 `staleMs()`（现算）。这个常量保留只为测试造「够老的锁」时有个
+ * 稳定的岁数基准；默认超时预算下它 === `staleMs()`。别在判活逻辑里用它。
+ */
+export const STALE_MS = staleMs();
 const POLL_MS = 120;
 export const DEFAULT_TIMEOUT_MS = 60_000;
 
@@ -68,6 +98,16 @@ export interface LockOpts {
    * 靠并发跑撞不出来。
    */
   onBeforeSteal?: () => void;
+  /**
+   * 测试接缝：release 里「回读确认锁是自己的」与「rmSync 删掉它」之间插一手。
+   *
+   * 开这个口子是为了让文件头描述的**释放侧残留子窗**能被一条测试钉住 —— 那个窗口
+   * 微秒级，靠并发跑撞不出来。时序：我持锁过龄 → 回读时锁还是我的 → 被调度走 →
+   * B 判我陈旧、抢走、建了自己的新锁 → 我醒来 rmSync **删掉 B 的新锁**。
+   * 与文件头的接受口径一致（残留子窗，git 自己的 ref 锁会明着报错兜底），
+   * 这条测试记录的是**当前行为**，不是断言它被消除了。
+   */
+  onBeforeRelease?: () => void;
 }
 
 const liveByKill = (pid: number): boolean => {
@@ -95,7 +135,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, 
 /**
  * 拿锁。拿到返回一个 release 函数，拿不到抛 `locked`。
  *
- * 三条判活，任一成立就当陈旧可抢：内容读不出来（写了一半就崩）、pid 已死、超过 STALE_MS。
+ * 三条判活，任一成立就当陈旧可抢：内容读不出来（写了一半就崩）、pid 已死、超过 `staleMs()`。
  */
 export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
   const path = opts.lockPath ?? lockPathDefault();
@@ -124,7 +164,14 @@ export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
         // 而慢 push 恰恰是最需要锁的时候。
         return () => {
           try {
-            if (readLock(path)?.pid === process.pid) rmSync(path, { force: true });
+            // 回读与删除之间是个 check-then-act 残留子窗（见文件头）：过龄被 B 抢走后，
+            // 若 B 恰在这两步之间完成抢锁并建了新锁，下面这句会把 **B 的新锁**删掉。
+            // 窗口微秒级，且只在「本会话已经过龄到被判陈旧」时才成立；兜底同抢锁侧 ——
+            // 真串了仓，git 自己的 index/ref 锁会明着报错，不是静默。onBeforeRelease 把
+            // 这个窗口暴露给测试钉住当前行为。
+            const mine = readLock(path)?.pid === process.pid;
+            opts.onBeforeRelease?.();
+            if (mine) rmSync(path, { force: true });
           } catch { /* 已经没了就算了 */ }
         };
       }
@@ -132,7 +179,7 @@ export async function acquireLock(opts: LockOpts = {}): Promise<() => void> {
       if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
       const held = readLock(path);
       lastHolder = held?.pid;
-      const stale = held === null || !alive(held.pid) || Date.now() - held.at > STALE_MS;
+      const stale = held === null || !alive(held.pid) || Date.now() - held.at > staleMs();
       if (stale) {
         // 挪走再删，不直接 unlink：rename 的源只有一个，两个进程同时抢时只有一个能成，
         // 另一个拿到 ENOENT 会回去继续排队。直接 unlink 的话两个都「成功」。

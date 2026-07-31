@@ -181,7 +181,7 @@ MCP 配置里写绝对路径：
 
 **~~`flock`~~ —— 2026-07-30 实现时发现这台机器上没有。** 本节原文写的是 `O_EXLOCK | O_NONBLOCK`。实测 Node v25.2.1 的 `fs.constants` 里**没有 `O_EXLOCK`**（`O_*` 只有 RDONLY / WRONLY / RDWR / CREAT / EXCL / NOCTTY / TRUNC / APPEND / DIRECTORY / NOFOLLOW / SYNC / DSYNC / SYMLINK / NONBLOCK），macOS 也没有 `flock(1)` 可以 shell 出去。照着写会得到 `O_CREAT | O_RDWR | undefined | O_NONBLOCK` —— `undefined` 在按位或里当 0，**锁标志静默消失，得到一把永远锁不上的锁，而且全部测试照绿**。
 
-现在的做法：`O_EXCL` 原子建锁文件，里面记 `{pid, at}`，三条判活任一成立就当陈旧可抢（内容读不出来 / pid 已死 / 超过 5 分钟）。**崩溃后不死锁靠的是判活，不是内核放锁** —— 这条差别决定了必须有一条真 `SIGKILL` 持锁子进程的测试，而不是断言「应该能拿到」。
+现在的做法：`O_EXCL` 原子建锁文件，里面记 `{pid, at}`，三条判活任一成立就当陈旧可抢（内容读不出来 / pid 已死 / 超过陈旧阈值 —— **从 git 超时预算推导，不是写死的 5 分钟**：`staleMs()` = 3× 单次 git 调用超时 + 60s 余量，硬底 600s，判定时现算，所以调大 `ZHUPI_GIT_TIMEOUT_MS` 阈值跟着涨；一次合法持锁跨 fetch → commit → push 最坏可达 ~540s，旧的 300s 兜不住）。**崩溃后不死锁靠的是判活，不是内核放锁** —— 这条差别决定了必须有一条真 `SIGKILL` 持锁子进程的测试，而不是断言「应该能拿到」。
 
 抢陈旧锁走 rename-aside，且三处必须成对存在（缺一条就会让两个进程同时进临界区，三条都是评审推演出来的，各配了一条接缝测试）：
 
