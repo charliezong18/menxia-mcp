@@ -1,4 +1,4 @@
-// 奏折体例检查的纯核。吃一份 Snapshot 吐 findings，**无 IO**。
+// 敕草体例检查的纯核。吃一份 Snapshot 吐 findings，**无 IO**。
 //
 // 规则以 `folder-lint.sh` 的**实现**为准，不以 SKILL.md 为准
 // （老脚本 2026-07-30 退休，原件存档在本仓 `retired/folder-lint.sh`，行号引用仍可核）
@@ -53,7 +53,7 @@ const ZH_HEAD = (slug: string) => `[English](${slug}.md) · **中文**`;
  *
  * 互链头的真实作用只剩一个：**在 GitHub 原生页面上互相点得到**。
  * 所以判据改成「点得到吗」，分隔符写 `·` 还是 `|`、路径带不带 `./` 一律不管 ——
- * 实测那正是 #12 被拦的全部原因，而它在朱批台上渲染完全正常。
+ * 实测那正是 #12 被拦的全部原因，而它在门下上渲染完全正常。
  * （zhupi 的 `link.js` 解析相对链接时也会吃掉 `./`。）
  */
 function linksToSibling(firstLine: string, sibling: string): boolean {
@@ -206,7 +206,7 @@ export function lint(snap: Snapshot): Finding[] {
     // 代价是它在 zhupi 里切不了语言，由中文版的横幅兜底。**这条只存在于代码里，SKILL.md 从没写过。**
     if (payload) {
       if (!zhBody.includes(PAYLOAD_BANNER)) {
-        push(3, 'hard', base, `${base} 中文版缺「勿从本页复制」横幅（防止把朱批页的内容当成待发正文复制出去）`);
+        push(3, 'hard', base, `${base} 中文版缺「勿从本页复制」横幅（防止把涂归页的内容当成待发正文复制出去）`);
       }
     } else {
       headCheck(push, base, en, firstLine(enBody), `${base}.zh-CN.md`, EN_HEAD(base));
@@ -266,7 +266,7 @@ export function lint(snap: Snapshot): Finding[] {
  * 互链头判定。**硬伤只留给「点不到对面」**，写法差异降成警告。
  *
  * 第三轮评审实测：17 个 open 折里 2 个被这条规则拦住，而两个都不是真问题
- * （#12 只是分隔符写成 `|`、路径带 `./`，朱批台渲染完全正常）。
+ * （#12 只是分隔符写成 `|`、路径带 `./`，门下渲染完全正常）。
  * 这个项目自己记着「拦太死把人逼向绕过闸门」——把误报做成硬伤就是重犯那次的错。
  */
 function headCheck(

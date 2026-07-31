@@ -37,7 +37,7 @@ export class NotAGitWorktree extends Error {}
  *    （`"docs/assets/\347\253\213..."`）。不关掉的话中文名文件**全挂** ——
  *    assets 集合里是转义串、正文引用是真名，永远对不上 → 中文名的图一律误报断图（硬伤）；
  *    changed 里的路径也带引号 → `git show ref:"docs\344..."` 必失败 → 双语齐的也报缺译本。
- *    第一轮评审实测：奏折仓 #31 那折 22 个中文名文档全部踩在上面。
+ *    第一轮评审实测：敕草仓 #31 那折 22 个中文名文档全部踩在上面。
  *
  * ② `maxBuffer`：默认 1 MiB，超了抛 ENOBUFS 被 catch 吞掉返回 null，
  *    等价于「文件不存在」—— 于是大文档既谎报缺译本、又让规则 4 整条不跑（真断图漏报）。
@@ -191,7 +191,7 @@ export function dirtyDocs(worktree?: string): string[] {
   return out.split('\n').map((s) => s.slice(3).trim()).filter(Boolean);
 }
 
-/** 巡检用：奏折仓里所有 open 折的分支名，靠调用方给。 */
+/** 巡检用：敕草仓里所有 open 折的分支名，靠调用方给。 */
 export function branchExists(worktree: string, ref: string): boolean {
   return tryGit(worktree, ['rev-parse', '--verify', '--quiet', ref]) !== null;
 }

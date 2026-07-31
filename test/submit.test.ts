@@ -54,7 +54,7 @@ describe('主输出是朱批台深链，不是 PR 链接', () => {
 
   it('工具描述里明写别拿 PR 链接当主输出（2026-07-27 踩过）', () => {
     const d = TOOLS.find((t) => t.name === 'open_folder')!.description;
-    expect(d).toContain('朱批台深链');
+    expect(d).toContain('门下深链');
     expect(d).toContain('别当主输出');
   });
 });

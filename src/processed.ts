@@ -8,7 +8,7 @@
 // 顺带修掉一个更严重的洞：会话区的 answered 原本靠位置推断
 // （`i < len-1 → 已答`），那成立的前提是「会话区是双方 channel」。
 // agent 不再发折级小结之后它变成单方收件箱，「后面还有话」只意味着
-// Charlie 又说了一句 → **他连发两条总批，前一条会被静默判成已答**（漏报）。
+// Charlie 又说了一句 → **他连发两条判，前一条会被静默判成已答**（漏报）。
 //
 // R7 的口径随之精确成「**不写远端**」：本文件是全项目唯一的写路径，
 // 且只写一个文件（`storePath()`）。guard.ts 有一条规则焊死这一点。
@@ -20,7 +20,7 @@
 //    并发实测 2.5% 触发。所以 `load` 现在必须分清「文件不存在」（合法空）和
 //    「读不出来」（`unreadable`），后者**拒绝写**——宁可让 mark_handled 明着失败。
 //
-// ② **只记 id 认不出「他改了那条总批」。** 他在 GitHub 上原地补一句
+// ② **只记 id 认不出「他改了那条判」。** 他在 GitHub 上原地补一句
 //    「第 3 点你根本没改」，id 不变 → 还是 handled → 那句话永不出现。
 //    这正是本版要杀的漏报换了个形态。所以记的是 `id → 当时的 updated_at`，
 //    他一编辑就重新变 pending。
@@ -40,7 +40,7 @@ export type LoadResult = {
   unreadable: boolean;
 };
 
-/** 一条总批的身份：id + 服务端最后修改时间。 */
+/** 一条判的身份：id + 服务端最后修改时间。 */
 export type Entry = { id: number; updatedAt: string };
 
 export function storePath(env: NodeJS.ProcessEnv = process.env): string {
@@ -175,8 +175,8 @@ function withLock<T>(path: string, fn: () => T): T {
 /**
  * 哪些是真·已处理：记过 **且** 记完之后他没再动过。
  *
- * `updatedAt > 记录值` = 他原地编辑了那条总批 → 重新变 pending。
- * 记录里有、但这次没传进来的（他删了总批）自然不出现，不用清理。
+ * `updatedAt > 记录值` = 他原地编辑了那条判 → 重新变 pending。
+ * 记录里有、但这次没传进来的（他删了判）自然不出现，不用清理。
  */
 export function handledIds(store: ProcessedStore, pr: number, items: Entry[]): Set<number> {
   const bucket = store[String(pr)];

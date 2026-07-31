@@ -51,7 +51,7 @@ export const FS_IMPORT_ALLOWED: ReadonlySet<string> = new Set([
 /**
  * 允许跑 git 写命令的模块。
  *
- * Phase 3 之前 `src/` 全禁。`worktree.ts` 是 SPEC §4.2 指定的**唯一**碰奏折仓的模块，
+ * Phase 3 之前 `src/` 全禁。`worktree.ts` 是 SPEC §4.2 指定的**唯一**碰敕草仓的模块，
  * 它要 `worktree add/remove`、`add`、`commit`、`push`。
  * 豁免按**文件**给，不按命令给 —— 按命令给等于全局放开。
  */
@@ -194,10 +194,10 @@ export function scanForMutations(files: Record<string, string>): Violation[] {
       // 把它也拦了只会逼人加例外，规则反而变松。
       //
       // 2026-07-30 收窄。收窄前 `scripts/lint-differential.mjs` 造样本仓时被拦，
-      // 而那些仓在 mkdtemp 出来的临时目录里、跑完就删，碰不到奏折仓。
+      // 而那些仓在 mkdtemp 出来的临时目录里、跑完就删，碰不到敕草仓。
       //
       // 2026-07-30（Phase 3）再收窄一次：`worktree.ts` 拿到豁免。它是 SPEC §4.2 指定的
-      // **唯一**碰奏折仓的模块，要 worktree add/remove + add + commit + push。
+      // **唯一**碰敕草仓的模块，要 worktree add/remove + add + commit + push。
       // 豁免按文件给，不按命令给 —— 按命令给等于全局放开。
       if (
         base.startsWith('src/') &&

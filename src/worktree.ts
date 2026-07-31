@@ -1,4 +1,4 @@
-// **唯一碰奏折仓的模块**（SPEC §4.2）。它拿锁、开临时 worktree、拷文档、commit、push，
+// **唯一碰敕草仓的模块**（SPEC §4.2）。它拿锁、开临时 worktree、拷文档、commit、push，
 // 用完即收。agent 全程不碰 `~/Developer/review` —— 互踩才真的堵死（CLAUDE.md 的
 // 「并行别互踩」记着 2026-07-27 的事故：多个 session 同时动那个仓，切走了对方的分支、
 // 把暂存文件卷进了别人的 commit）。
@@ -315,7 +315,7 @@ const dirOf = (p: string): string => p.slice(0, p.lastIndexOf('/'));
 /**
  * 图落到仓里哪个路径。
  *
- * 上一版一律拍平成 `docs/assets/<basename>`。**那与奏折仓自己的布局对不上**
+ * 上一版一律拍平成 `docs/assets/<basename>`。**那与敕草仓自己的布局对不上**
  * （第三轮跨系统评审 2026-07-30）：main 上真实存在的是
  * `docs/assets/shots/annotate.png` / `dark.png` / `setup.png`，
  * 而 `docs/zhupi-readme.md` 正文引用的是 `assets/shots/setup.png`。
@@ -353,7 +353,7 @@ export async function stageFolder(
 
   return withReviewLock(async () => {
     if (tryGit(repo, ['rev-parse', '--git-dir']) === null) {
-      return fail({ kind: 'worktree', what: `奏折仓的本地 checkout 不是 git 工作树：${repo}`, hint: '用 ZHUPI_REVIEW_PATH 指对地方。' });
+      return fail({ kind: 'worktree', what: `敕草仓的本地 checkout 不是 git 工作树：${repo}`, hint: '用 ZHUPI_REVIEW_PATH 指对地方。' });
     }
     // 先清尸体。实测这台机器上 `git worktree list` 挂着 9 个 /private/tmp 的旧条目，
     // 都是并行 session 留下的；目录还在的不动，只清目录已经没了的。
@@ -438,7 +438,7 @@ export async function stageFolder(
       pushed = true;
       return { worktree: wt, branch: req.branch, copied, headSha: git(wt, ['rev-parse', 'HEAD']), fetchFailed };
     } finally {
-      // worktree 一律收掉。**分支只在没推上去时删** —— 推上去了就是一折真奏折，
+      // worktree 一律收掉。**分支只在没推上去时删** —— 推上去了就是一折真敕草，
       // 本地分支留着，后面出 v2 还要往它上面推。
       tryGit(repo, ['worktree', 'remove', '--force', wt]);
       rmSync(wt, { recursive: true, force: true });

@@ -209,7 +209,7 @@ describe('reply_comment', () => {
   // **命令全部成功而结果是零**。guard-closed-folder.sh 拦的是 Bash，MCP 调用从旁边过去。
   it('已钦此的折 —— 拒，且一个写请求都没发', async () => {
     prState = { state: 'closed', merged_at: '2026-07-29T00:00:00Z' };
-    await expect(replyComment({ pr: 32, commentId: 1, body: 'x' }, ref)).rejects.toThrow(/钦此/);
+    await expect(replyComment({ pr: 32, commentId: 1, body: 'x' }, ref)).rejects.toThrow(/画可/);
     expect(writes()).toEqual([]);
   });
 

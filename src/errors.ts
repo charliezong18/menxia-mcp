@@ -78,7 +78,7 @@ function raw(e: ZhupiError): string {
     case 'locked':
       // 明着说「另一个会话在呈折」，别让调用方以为是自己写错了。
       // 挂死才是最糟的形态：SPEC §4.2 要的就是「知道是在排队」而不是「不知道发生了什么」。
-      return `等了 ${Math.round(e.waitedMs / 1000)} 秒还没拿到奏折仓的锁` +
+      return `等了 ${Math.round(e.waitedMs / 1000)} 秒还没拿到敕草仓的锁` +
         `${e.heldBy ? `（被进程 ${e.heldBy} 占着）` : ''}。多半是另一个会话正在呈折，` +
         '等它完事再试。锁在 ~/.zhupi-mcp/review.lock，确认没有别的会话在跑的话可以删掉它。';
     case 'worktree':

@@ -21,18 +21,18 @@ export const TOOLS = [
   {
     name: 'list_folders',
     description:
-      '列出奏折仓里的折（PR），按最近活动倒序，带计数与「要看一眼」的正文预览。\n' +
-      '· counts.needsReply —— 要处理：他发的没有回话的 inline 批注，加上没记过已处理的总批。' +
-      '**注意总批那一半会多报**：共用同一个 GitHub 账号，agent 自己历史上发的总批也会算进来（看 attention 的 preview 就能分辨）\n' +
+      '列出敕草仓里的折（PR），按最近活动倒序，带计数与「要看一眼」的正文预览。\n' +
+      '· counts.needsReply —— 要处理：他发的没有回话的 inline 批注，加上没记过已处理的判。' +
+      '**注意判那一半会多报**：共用同一个 GitHub 账号，agent 自己历史上发的判也会算进来（看 attention 的 preview 就能分辨）\n' +
       '· counts.unclear —— **判不了**：inline 串里最后一条没盖 `**回话**` 前缀，那句是我方回的还是他从网页追的分不出。' +
       '看 attention 里的 preview 自己判，别当成 0 就跳过\n' +
       '· attention[] —— 每条待看的正文前 80 字 + 时间，够直接判断要不要处理\n' +
-      '总批的已处理状态记在本地（agent 私有），处理完请调 mark_handled 记一笔，否则它会一直挂着。' +
+      '判的已处理状态记在本地（agent 私有），处理完请调 mark_handled 记一笔，否则它会一直挂着。' +
       '坏折返回 { ok: false, error }，没有 counts。',
     inputSchema: {
       type: 'object',
       properties: {
-        state: { type: 'string', enum: [...STATE_VALUES], description: '默认 open；merged = 已钦此的折' },
+        state: { type: 'string', enum: [...STATE_VALUES], description: '默认 open；merged = 已画可的折' },
       },
       additionalProperties: false,
     },
@@ -43,14 +43,14 @@ export const TOOLS = [
       '把一折的批注读成结构化 JSON。**要读某一折就传 pr**——不传会扫全部 open 折，体积大一个量级。\n' +
       '· inline —— 还原好的批注串：根批注 + replies，含引文 quote、行号 line、是否 outdated。' +
       '每条 reply 带两个标记：`ours=true` **确定**是我方回的（盖了 `**回话**` 前缀）；' +
-      '`fromDesk=true` **确定**是他从朱批台说的。**两个都 false 表示判不了**' +
+      '`fromDesk=true` **确定**是他从门下说的。**两个都 false 表示判不了**' +
       '（他从 GitHub 网页在串里回话，与 agent 回话在 API 里完全同形）\n' +
-      '· conversation —— 会话区总批。`answered` 是 handled / pending 两值，**取自本地已处理记录，不是推断**；' +
-      'fromDesk=true 的是 zhupi 因为锚不到行而并入总批的朱批\n' +
+      '· conversation —— 会话区判。`answered` 是 handled / pending 两值，**取自本地已处理记录，不是推断**；' +
+      'fromDesk=true 的是 zhupi 因为锚不到行而并入判的涂归\n' +
       '· inline[].answered —— 只在 fromDesk=true 时有意义；fromDesk=false 表示这条根批注' +
-      '不是从朱批台来的（可能是他从 GitHub 网页发的，也可能是 agent 自己发的），此时看 attention。' +
+      '不是从门下来的（可能是他从 GitHub 网页发的，也可能是 agent 自己发的），此时看 attention。' +
       '`orphan=true` 表示它回复的根批注不在结果里（根被删），一律按未回处理\n' +
-      '· handledIds —— 该折已记过已处理的总批 id（本地记录），配 stateFile 一起给出，' +
+      '· handledIds —— 该折已记过已处理的判 id（本地记录），配 stateFile 一起给出，' +
       '好让人能查「这条我处理没有」\n' +
       '· counts / attention —— 与 list_folders 同名同义',
     inputSchema: {
@@ -81,7 +81,7 @@ export const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        worktree: { type: 'string', description: '奏折仓工作树路径，默认当前目录' },
+        worktree: { type: 'string', description: '敕草仓工作树路径，默认当前目录' },
         ref: { type: 'string', description: '要查的 ref，默认 HEAD；巡检传 origin/<分支>' },
         base: { type: 'string', description: '基线，默认 origin/main' },
       },
@@ -91,15 +91,15 @@ export const TOOLS = [
   {
     name: 'mark_handled',
     description:
-      '把某折的总批标记成「已处理」。**写的是 agent 本地记录，不碰 GitHub。**\n' +
+      '把某折的判标记成「已处理」。**写的是 agent 本地记录，不碰 GitHub。**\n' +
       '为什么要有它：agent 与用户共用同一个 GitHub 账号，任何写进 GitHub 的标记都会退化成靠约定；' +
       '而「这条我处理过了」只有 agent 知道，放本地就与账号共用无关了。\n' +
-      '什么时候调：读完总批、改完文档、在聊天里回过他之后，把处理过的 conversation id 记一笔。' +
+      '什么时候调：读完判、改完文档、在聊天里回过他之后，把处理过的 conversation id 记一笔。' +
       '**不记它就会一直挂在 needsReply 里。**\n' +
-      '**记的是 id + 当时的修改时间**，所以他之后原地编辑那条总批，它会自动重新变 pending。\n' +
+      '**记的是 id + 当时的修改时间**，所以他之后原地编辑那条判，它会自动重新变 pending。\n' +
       '`ids` 从 `read_comments(pr).conversation[].id` 来。\n' +
       '`seed: true` = 清历史积压。**两步**：先不带 confirm 调一次，它只返回「将要标掉什么」' +
-      '（含正文预览，`fromDesk: true` 的是**他的朱批**，标掉等于让他的话消失）；看清楚了再带 `confirm: true` 落盘。\n' +
+      '（含正文预览，`fromDesk: true` 的是**他的涂归**，标掉等于让他的话消失）；看清楚了再带 `confirm: true` 落盘。\n' +
       '`undo: true` + `ids` = 撤销标记（标错了用这个）。',
     inputSchema: {
       type: 'object',
@@ -117,7 +117,7 @@ export const TOOLS = [
   {
     name: 'open_folder',
     description:
-      '呈折：把本机的文档拷进奏折仓、开分支、commit、查体例、push、建 PR、焊入「回奏对」标记并回读自核。\n' +
+      '呈折：把本机的文档拷进敕草仓、开分支、commit、查体例、push、建 PR、焊入「回奏对」标记并回读自核。\n' +
       '**这是呈折的正路，别自己去 ~/Developer/review 里 git。** 你全程不碰那个仓——' +
       '多个 session 同时动它会切走对方的分支、把暂存文件卷进别人的 commit（2026-07-27 实测）。\n' +
       '· `docs` 传**本机绝对路径**，不传全文。**双语一对都要给**（`x.md` + `x.zh-CN.md`）——' +
@@ -127,13 +127,13 @@ export const TOOLS = [
       '会登记进 `docs/.monolingual`。**别拿它绕过「该翻没翻」**：判据是「这东西本来就不该有译本」\n' +
       '· 分支名默认取第一篇文档的 slug；分支已存在会**明着报错**，不覆盖（重复呈折是真事故）\n' +
       '· 体例闸门卡在 commit 之后、push 之前：不合格时**远端一片干净**，什么都没推上去\n' +
-      '· 返回的 `desk` 是朱批台深链，**给他这个**；`prUrl` 是载体，别当主输出' +
-      '（给 GitHub 链接会读成「让你发朱批你却发了个 PR」，2026-07-27 踩过）\n' +
+      '· 返回的 `desk` 是门下深链，**给他这个**；`prUrl` 是载体，别当主输出' +
+      '（给 GitHub 链接会读成「让你发涂归你却发了个 PR」，2026-07-27 踩过）\n' +
       '· `warnings` 要照读：body 缺段、标记没埋上、分支基点落后都在里面，它们不阻断但都影响他读折',
     inputSchema: {
       type: 'object',
       properties: {
-        title: { type: 'string', description: '奏折标题，也是 commit message' },
+        title: { type: 'string', description: '敕草标题，也是 commit message' },
         body: {
           type: 'object',
           description: '五段模板。缺项只警告不拦，但缺「待你拍板」他就不知道要拍什么',
@@ -163,12 +163,12 @@ export const TOOLS = [
     name: 'reply_comment',
     description:
       '对某条 inline 批注回话。首行的 `**回话**` 前缀**由工具焊上**，你不用自己写。\n' +
-      '· `commentId` **必填**。省掉它在旧 SPEC 里是「发总批」，那条路已经关了——' +
-      'agent 发的总批与他的在 API 里完全同形（共用账号），会变成清不掉的假待办，实测多报 77%。' +
+      '· `commentId` **必填**。省掉它在旧 SPEC 里是「发判」，那条路已经关了——' +
+      'agent 发的判与他的在 API 里完全同形（共用账号），会变成清不掉的假待办，实测多报 77%。' +
       '折级小结**在聊天里说**；要留档的元数据写进 `docs/<slug>.md` 正文\n' +
       '· 前缀不是装饰：你和他共用同一个 GitHub 账号，回话在 API 里完全同形，' +
       '`isOurReply()` 靠它把这串从「判不了」挪进「确定已回」\n' +
-      '· **已钦此/已关的折会被拒**——回话落在没人看的已关页面上，命令全部成功而结果是零' +
+      '· **已画可/已关的折会被拒**——回话落在没人看的已关页面上，命令全部成功而结果是零' +
       '（2026-07-29 #23 就是这么绕了一大圈）。要补内容一律另开一折',
     inputSchema: {
       type: 'object',
@@ -379,7 +379,7 @@ export async function handleTool(
       const targets = all.filter((e) => e.answered === 'pending');
       if (args.confirm === undefined) {
         // **只预览，不写。** seed 是全系统唯一不可逆又不可见的操作，而它吞掉的可能是
-        // 他的朱批本身（zhupi 锚不到行会把批注并入总批）——评审在 #9 上实测过一次。
+        // 他的涂归本身（zhupi 锚不到行会把批注并入判）——评审在 #9 上实测过一次。
         return {
           repo: ref.slug,
           pr,
@@ -387,12 +387,12 @@ export async function handleTool(
           wouldMark: targets.length,
           targets,
           // **默认就警告。** 上一版只在 `fromDesk` 为真时警告，而第三轮评审实测
-          // 那条路径（zhupi 锚不到行降级并入总批）在生产里 **0/16 折触发过** ——
-          // 于是唯一的护栏是死的，而他 99% 的总批都是 fromDesk:false，拿到的是让人放心的那句。
+          // 那条路径（zhupi 锚不到行降级并入判）在生产里 **0/16 折触发过** ——
+          // 于是唯一的护栏是死的，而他 99% 的判都是 fromDesk:false，拿到的是让人放心的那句。
           hint:
-            `⚠️ 这些总批的作者 API 分不出来（共用账号）。逐条看 preview 再决定 —— ` +
+            `⚠️ 这些判的作者 API 分不出来（共用账号）。逐条看 preview 再决定 —— ` +
             `标掉的东西在所有工具输出里都消失，且他不可能发现。` +
-            (targets.some((t) => t.fromDesk) ? '**其中带 fromDesk 的确定是他的朱批**（zhupi 降级并入），尤其别标。' : '') +
+            (targets.some((t) => t.fromDesk) ? '**其中带 fromDesk 的确定是他的涂归**（zhupi 降级并入），尤其别标。' : '') +
             `确认要标就调 { pr: ${pr}, seed: true, confirm: ${targets.length} }。`,
         };
       }
@@ -414,12 +414,12 @@ export async function handleTool(
     }
 
     // 不在这折里的 id 直接拒。默认接受会静默污染状态文件，且**没有任何提示**——
-    // 打错折号、把 inline comment id 当总批 id 传，都会「成功」（实测）。
+    // 打错折号、把 inline comment id 当判 id 传，都会「成功」（实测）。
     const unknown = ids.filter((i) => !byId.has(i));
     if (unknown.length > 0) {
       throw new ZhupiFailure({
         kind: 'badInput',
-        what: `#${pr} 里没有这些总批：${unknown.join(' / ')}。id 取自 read_comments(${pr}).conversation[].id`,
+        what: `#${pr} 里没有这些判：${unknown.join(' / ')}。id 取自 read_comments(${pr}).conversation[].id`,
       });
     }
     const entries: Entry[] = ids.map((i) => byId.get(i)!);
@@ -472,14 +472,14 @@ export async function handleTool(
     rejectUnknownKeys('reply_comment', args, ['pr', 'commentId', 'body']);
     const pr = parsePr(args.pr);
     if (pr === undefined) throw new ZhupiFailure({ kind: 'badInput', what: 'reply_comment 必须给 pr' });
-    // **commentId 必填。** 省掉它在旧 SPEC §3.6 里是「发总批」——那条路 2026-07-30 关了
+    // **commentId 必填。** 省掉它在旧 SPEC §3.6 里是「发判」——那条路 2026-07-30 关了
     // （硬约定①，实测 13 条 needsReply 里 7 条是 agent 自己的话，多报 77%）。
     // 报错要把替代动作说清楚，否则模型会以为是自己写错了参数然后换个写法重试。
     if (args.commentId === undefined) {
       throw new ZhupiFailure({
         kind: 'badInput',
         what: 'reply_comment 必须给 commentId（inline 根批注 id，从 read_comments 来）',
-        hint: '省掉它以前是「发总批」，那条路已经关了：折级小结在聊天里说，要留档的元数据写进 docs/<slug>.md 正文。',
+        hint: '省掉它以前是「发判」，那条路已经关了：折级小结在聊天里说，要留档的元数据写进 docs/<slug>.md 正文。',
       });
     }
     const commentId = parseCommentId(args.commentId);
