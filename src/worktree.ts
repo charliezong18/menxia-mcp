@@ -24,7 +24,7 @@
 
 import {
   closeSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, openSync,
-  readFileSync, renameSync, rmSync, writeSync,
+  readFileSync, renameSync, rmSync, writeFileSync, writeSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -212,6 +212,19 @@ export interface StageRequest {
   /** 分支名。 */
   branch: string;
   message: string;
+  /**
+   * 这一折是**单语读物**，免双语对（D9）。
+   *
+   * 为什么要有这个开关：豁免机制 `docs/.monolingual` 从 2026-07-30 加上起
+   * **一次都没能用上** —— 那是个仓内文件，而 `open_folder` 只会把 `docs` 里的东西
+   * 拷成 `docs/<basename>`，没有任何路径能创建或追加它。第三轮跨系统评审把这个
+   * 记成「登记表文件够不着」，当时归成理论问题；实际后果是 #31（22 章官制史）
+   * 长期在巡检里报 22 条假硬伤，而**一个开始报假红的检查，人就学会忽略它**。
+   *
+   * 落在**折自己的分支**上，随折 merge 进 main —— 之后从 main 切的折自动继承。
+   * 这与 `.payload` 同一个模型。
+   */
+  monolingual?: boolean;
 }
 
 export interface Staged {
@@ -350,6 +363,19 @@ export async function stageFolder(
         place(src, wt, rel, copied);
       }
       if (copied.length === 0) return fail({ kind: 'worktree', what: '一个文档都没有', hint: 'docs 至少要给一对（中英各一份）。' });
+
+      // 单语读物登记。**追加不是覆盖** —— 从 main 继承来的条目（前几折登记过的）
+      // 一条都不能丢，丢了那几折下次就又被规则 1 判死。
+      if (req.monolingual) {
+        const reg = join(wt, 'docs', '.monolingual');
+        const had = existsSync(reg) ? readFileSync(reg, 'utf8') : '';
+        const lines = had.split('\n').map((l) => l.trim()).filter(Boolean);
+        const want = copied.filter((p) => p.endsWith('.md'));
+        const merged = [...lines];
+        for (const p of want) if (!merged.includes(p)) merged.push(p);
+        writeFileSync(reg, `${merged.join('\n')}\n`);
+        copied.push('docs/.monolingual');
+      }
 
       if (tryGit(wt, ['add', '--', 'docs']) === null) return fail({ kind: 'worktree', what: 'git add 失败' });
       if (tryGit(wt, ['commit', '-m', req.message]) === null) {

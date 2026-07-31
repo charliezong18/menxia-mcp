@@ -44,6 +44,11 @@ export interface OpenFolderInput {
   sessionId?: string;
   /** 覆盖用。默认取第一篇文档的 slug。 */
   branch?: string;
+  /**
+   * 这一折是**单语读物**（只有一种语言，不需要译本），免体例规则 1 的双语对。
+   * 会往 `docs/.monolingual` 追加本折的文档路径，随折 merge 进 main。
+   */
+  monolingual?: boolean;
 }
 
 export interface OpenFolderResult {
@@ -81,7 +86,13 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
 
   let findings: Finding[] = [];
   const staged = await stageFolder(
-    { docs: input.docs, ...(input.assets ? { assets: input.assets } : {}), branch, message: input.title },
+    {
+      docs: input.docs,
+      ...(input.assets ? { assets: input.assets } : {}),
+      ...(input.monolingual ? { monolingual: true } : {}),
+      branch,
+      message: input.title,
+    },
     async (s: Staged) => {
       findings = lint(collect({ worktree: s.worktree, ref: 'HEAD', base: 'origin/main', body: built.text, skipFetch: true }));
       if (hasHard(findings)) {
