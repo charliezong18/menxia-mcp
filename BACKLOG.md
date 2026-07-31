@@ -126,3 +126,20 @@ The third is decisive: a required check would **light up red where he cannot see
 **And that single red exposed a different, real debt**: the `docs/.monolingual` exemption had never once been usable (a file inside the repo, and `open_folder` had no path that could create it), so #31 reported 22 false hard findings for its whole life. **A check that starts reporting false red is a check people learn to ignore** — that is killing this gate more concretely than any bypass. Fixed (`open_folder`'s `monolingual` flag, plus a one-off registration for #31); the sweep is now 19/19 clean.
 
 **Reopening criteria**: the first real bypass (an open folder with no return-to-session marker), or `audit_folders` reporting drift that is not a false positive. Until then detection belongs to `audit_folders()` — same core, sweeps every open folder, never touches the merge path.
+
+## B7 · One fragment per folder for the registries (`.payload` / `.monolingual` are collision magnets)
+
+**What**: `docs/.payload` and `docs/.monolingual` are each **a single shared line-list file**. Change them to one fragment per folder (`docs/.payload.d/<slug>`), or drop the registry entirely and put the exemption marker inside the document itself.
+
+**Why**: hit for real on 2026-07-31 — #7 and #35 each created `docs/.payload` to register their own outbound document, so both sides "added" the same filename, collided add/add, and #35 failed to merge a second time. **Nothing to do with content; the file shape alone determines it**: any two folders registering at the same time must collide, and since a registry is union-semantic by definition, every one of these conflicts is 100% spurious — git has never once stopped something that genuinely needed a human. `.monolingual` has the same shape, and **the next collision can already be predicted**: it has never reached main (only the open folder #31 carries it), so the moment a second folder registers a monolingual document it will collide with #31 in exactly the same way.
+
+This is the same root as the `.monolingual` debt above: **a writable file shared across folders**. Last time the symptom was "can't be created at all"; this time it's "two folders create it at once".
+
+**How**:
+
+- Cheap tier: `docs/.payload.d/<slug>` — one file per folder, lint reads the whole directory and unions it. Different folders write different filenames, so they can never collide. On the `open_folder` side it's just "write a fragment" instead of "write the file".
+- Ceiling: put the exemption marker in an HTML comment on the document's first line (e.g. `<!-- payload -->`) and delete the registry outright. The marker travels with the document, which buys one more thing: **no dangling entries when a file is deleted but its registration isn't** — and a shared list is guaranteed to accumulate that kind of garbage.
+
+**Undecided**: which tier. Fragments are a purely mechanical change that preserves today's lint structure and do eliminate the collisions outright — but they can't fix the dangling entries that come from keeping registration separate from the document. The in-document marker solves both at once, at the cost of changing lint's read path. Leaning towards the latter.
+
+**Meets the scheduling rule**: this came out of a real folder submission, not from speculation.
