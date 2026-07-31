@@ -141,9 +141,38 @@ describe('回话前缀不能毁掉块级 markdown（第三轮：zhupi 走 markdo
     }
   });
 
+  // setext 标题只有看**第二行**才认得出：`标题\n====` 是 H1、`标题\n----` 是 H2。
+  // 焊在首行上的 `**回话** 标题` 会连标题一起被渲成大标题 —— 必须另起一段。
+  it('setext 标题（下一行是 === / ---）—— 前缀另起一段', () => {
+    for (const body of ['标题\n====', '标题\n=', 'Heading\n-----', 'Heading\n---', '标题\n  ===  ']) {
+      expect(withReplyPrefix(body), body).toBe(`${REPLY_PREFIX}\n\n${body}`);
+    }
+  });
+
+  // 首行缩进 ≥4 空格 / Tab 是缩进代码块。`**回话** ` 顶掉缩进，代码块塌成普通句。
+  it('首行是缩进代码块（≥4 空格 / Tab）—— 前缀另起一段', () => {
+    for (const body of ['    const x = 1;', '\tconst y = 2;', '        深缩进也算']) {
+      expect(withReplyPrefix(body), body).toBe(`${REPLY_PREFIX}\n\n${body}`);
+    }
+  });
+
+  // CommonMark 容块级起手带 0–3 空格缩进（4 起才是缩进代码块）。判定若锚死列 0，
+  // `  > 引文` 这类会漏进同一行路径、构造被前缀焊毁 —— Fable 复审抓的回归（改前四例全红）。
+  it('块级起手带 0–3 空格缩进 —— 仍是块级，前缀另起一段', () => {
+    for (const body of ['  > 缩进引用', ' - 缩进列表', '   ```\ncode\n```', '  ## 缩进标题']) {
+      expect(withReplyPrefix(body), body).toBe(`${REPLY_PREFIX}\n\n${body}`);
+    }
+  });
+
   it('普通首行仍然同一行（300px 栏里别三层重复）', () => {
     expect(withReplyPrefix('采纳，已改。')).toBe(`${REPLY_PREFIX} 采纳，已改。`);
     expect(withReplyPrefix('`inline code` 开头也算普通行')).toBe(`${REPLY_PREFIX} \`inline code\` 开头也算普通行`);
+  });
+
+  // setext 检测不能过火：第二行只是普通句子（不是纯 === / ---）时仍走同一行。
+  it('第二行是普通句子（不构成 setext）—— 仍然同一行', () => {
+    expect(withReplyPrefix('第一行\n第二行是普通句子')).toBe(`${REPLY_PREFIX} 第一行\n第二行是普通句子`);
+    expect(withReplyPrefix('结论先行。\n展开在后面。')).toBe(`${REPLY_PREFIX} 结论先行。\n展开在后面。`);
   });
 });
 
