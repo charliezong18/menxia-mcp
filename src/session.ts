@@ -1,4 +1,5 @@
-// 「回奏对」标记的会话 id 探测。移植自 `~/.claude/skills/review-loop/happy-session-id.sh`。
+// 「回奏对」标记的会话 id 探测。移植自 `happy-session-id.sh`
+// （那个脚本 2026-07-30 退休，原件存档在本仓 `retired/happy-session-id.sh`）。
 //
 // 原理：本进程是 happy CLI 的后代 —— 沿 ppid 往上爬，拿每一级 pid 去比
 // `~/.happy/sessions.json` 里各会话记的 hostPid，撞上的那个就是我。

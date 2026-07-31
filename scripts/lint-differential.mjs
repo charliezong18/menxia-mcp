@@ -5,8 +5,15 @@
 // 理由：differential 会随老脚本一起死（D1 的退休条件是删掉它）、真实语料 14/16 空转、
 // 且结构性覆盖不到新增的规则 5 和 9（它们的差异会被白名单化）。
 //
-// 它保留下来做**一次性迁移对照**：跑一遍，把每处差异分类成「bug」或「刻意改进」，
-// 留档。可重跑，直到老脚本退休那天。
+// 它保留下来做**一次性迁移对照**：跑一遍，把每处差异分类成「bug」或「刻意改进」，留档。
+//
+// **老脚本 2026-07-30（Phase 4）退休了**，`~/.claude/skills/review-loop/` 下已经没有它。
+// 默认路径改指仓内存档 `retired/folder-lint.sh` —— 这样这个脚本仍然跑得起来，
+// 那些「刻意改进」的分类仍然可复核。**但它已经是史料**：新的上线判据是
+// `scripts/retire-gate.mjs`（每条规则一个必失败样本），不是这个。
+//
+// 提醒：存档的老脚本带着 `folder-lint.sh:58` 那个假通过 bug（「缺中文版」它一次没拦住过），
+// 所以对照结果里那一类的「差异」是**新实现对、老的错**，别读反。
 //
 // 复用 acceptance.mjs 的判据风格（正向断言 + ✓/✗ + 失败计数）——
 // 那个文件的头注释就写着 differential 最需要的教训：「返回空必然变红」。
@@ -20,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // 路径可覆盖 + **存在性先查**。上一版硬编码且不查，老脚本不在时它会报
 // 10 条「未归类的差异 / 新多出 1:hard:a」—— 把人送去追一个不存在的规则差异（第二轮评审）。
-const OLD = process.env.ZHUPI_OLD_LINT ?? `${process.env.HOME}/.claude/skills/review-loop/folder-lint.sh`;
+const OLD = process.env.ZHUPI_OLD_LINT ?? join(root, 'retired', 'folder-lint.sh');
 const NEW = process.env.ZHUPI_NEW_LINT ?? join(root, 'dist', 'lint-cli.js');
 const REVIEW = process.env.ZHUPI_REVIEW_REPO_PATH ?? `${process.env.HOME}/Developer/review`;
 
