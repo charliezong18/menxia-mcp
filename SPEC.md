@@ -58,6 +58,7 @@ body: {
 docs:       string[]           Local absolute paths, both of the bilingual pair must be provided
 assets:     string[]?          Local absolute paths, images referenced in the text
 sessionId:  string?            For override; if absent, the server auto-detects, if it can't detect it won't embed
+monolingual: boolean?          This folder is a monolingual reading, exempt from the bilingual pair; registered in docs/.monolingual
 ```
 
 Returns: PR number, PR URL, deep link to the annotation desk (zhupi) `https://charliezong18.github.io/zhupi/?pr=<n>`, lint report.
@@ -65,6 +66,10 @@ Returns: PR number, PR URL, deep link to the annotation desk (zhupi) `https://ch
 **`docs` passes paths, not full text**, this is deliberate. Running on the same machine, the server copies files into the worktree it manages; the agent never touches `~/Developer/review` — parallel trampling is exactly what blocks execution. Passing full text via tool arguments not only wastes tokens, but also keeps the agent in the mental model of "I can write into that repo myself".
 
 Copy destination: `docs` land in `docs/<basename>`; `assets` land in `docs/assets/…` — if `/assets/` appears in the source path, **preserve the entire segment after it**, otherwise use the basename. Referenced in the text via relative paths starting with `assets/`.
+
+**`monolingual: true` (added 2026-07-31)**: **appends** this folder's document paths to `docs/.monolingual` on the folder's own branch (append, never overwrite — entries inherited from main must not be lost; losing one means those folders get hard-failed by Rule 1 on their next pass, and nobody notices immediately). It rides into main with the folder, and folders cut from main afterwards inherit it. Same model as `.payload`.
+
+Why it was added: D9 introduced this exemption, but **it had never once been usable** — it is a file inside the repo, while `open_folder` only copies `docs` to `docs/<basename>`, so no path could create or append to it. The third (cross-system) review recorded this as "the registry files are unreachable" and it was filed as theoretical; in practice #31 (the 22-chapter 官制史) spent its whole life reporting 22 false hard findings — and **a check that starts reporting false red is a check people learn to ignore**.
 
 (2026-07-30 amendment: The previous version said to unconditionally flatten to `docs/assets/<basename>`. The actual layout in the repo has subdirectories — `docs/assets/shots/annotate.png`, etc., and `docs/zhupi-readme.md` references exactly `assets/shots/setup.png`. zhupi resolves relative to the document's own directory (`render.js:27`); flattening would turn these references into broken images, and Rule 4 would blame the document, making people modify the text — meaning the same document would say different things in two folders.)
 
