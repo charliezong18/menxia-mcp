@@ -428,3 +428,92 @@ describe('两条只能靠接缝证的防御（变异战役里原样存活过）'
     }
   }, 60_000);
 });
+
+// ── 单语读物登记（2026-07-31 补）──
+//
+// `docs/.monolingual` 是 D9 给「不需要译本的读物」留的豁免，但它从加上起**一次都没能用上**：
+// 那是个仓内文件，而 open_folder 只会把 docs 拷成 `docs/<basename>`，
+// 没有任何路径能创建或追加它。后果不是理论上的 —— #31（22 章官制史）长期在巡检里
+// 报 22 条假硬伤，而**一个开始报假红的检查，人就学会忽略它**。
+describe('单语读物登记（docs/.monolingual）', () => {
+  const noLint = async (): Promise<void> => {};
+
+  it('第一次登记 —— 建出文件，内容是本折的文档路径', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'reading.md'), '# 只有中文的读物\n');
+    try {
+      const out = await stageFolder(
+        { docs: [join(src, 'reading.md')], branch: 'mono-1', message: 'm', monolingual: true },
+        noLint,
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      expect(out.copied).toContain('docs/.monolingual');
+      expect(git(origin, ['show', 'mono-1:docs/.monolingual'])).toBe('docs/reading.md');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // 这一条是命脉：main 上已有的条目（前几折登记过的）一条都不能丢 ——
+  // 丢了那几折下次就又被规则 1 判死，而且没人会立刻发现。
+  it('已有条目**追加不覆盖**，且不重复', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    // main 上先有一份登记（模拟前几折留下的）
+    writeFileSync(join(repo, 'docs', '.monolingual'), 'docs/older.md\ndocs/reading.md\n');
+    git(repo, ['add', '-A']); git(repo, ['commit', '-q', '-m', 'seed registry']); git(repo, ['push', '-q', 'origin', 'main']);
+    writeFileSync(join(src, 'reading.md'), '# 又一篇\n');
+    writeFileSync(join(src, 'fresh.md'), '# 新的\n');
+    try {
+      await stageFolder(
+        { docs: [join(src, 'reading.md'), join(src, 'fresh.md')], branch: 'mono-2', message: 'm', monolingual: true },
+        noLint,
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      const got = git(origin, ['show', 'mono-2:docs/.monolingual']).split('\n');
+      expect(got).toEqual(['docs/older.md', 'docs/reading.md', 'docs/fresh.md']);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('不给这个开关就一个字都不写', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'plain.md'), 'x\n');
+    try {
+      const out = await stageFolder(
+        { docs: [join(src, 'plain.md')], branch: 'mono-3', message: 'm' },
+        noLint, { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      expect(out.copied).not.toContain('docs/.monolingual');
+      expect(() => git(origin, ['show', 'mono-3:docs/.monolingual'])).toThrow();
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // 登记的路径必须与 lint 的匹配方式一致：`lint.ts:190` 比的是**整行仓内路径**
+  // （`snap.monolingual.includes(en)`），不是 slug。写错形式 = 豁免静默失效。
+  it('写进去的是整行仓内路径，规则 1 真的认', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'zh-only.md'), '# 中文读物\n');
+    try {
+      await stageFolder(
+        { docs: [join(src, 'zh-only.md')], branch: 'mono-4', message: 'm', monolingual: true },
+        noLint, { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      const reg = git(origin, ['show', 'mono-4:docs/.monolingual']);
+      expect(reg).toBe('docs/zh-only.md');
+      // lint 侧真跑一遍：登记了就不该再报规则 1
+      const { collect } = await import('../src/snapshot.js');
+      const { lint } = await import('../src/lint.js');
+      const findings = lint(collect({ worktree: repo, ref: 'origin/mono-4', base: 'origin/main', skipFetch: false }));
+      expect(findings.filter((f) => f.rule === 1)).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+});

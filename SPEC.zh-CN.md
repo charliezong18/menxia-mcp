@@ -58,6 +58,7 @@ body: {
 docs:       string[]           本机绝对路径，双语一对都要给
 assets:     string[]?          本机绝对路径，正文引用的图
 sessionId:  string?            覆盖用；不给则服务端自行探测，探不到就不埋
+monolingual: boolean?          这折是单语读物，免双语对；登记进 docs/.monolingual
 ```
 
 返回：PR 号、PR URL、朱批台深链 `https://charliezong18.github.io/zhupi/?pr=<n>`、lint 报告。
@@ -65,6 +66,10 @@ sessionId:  string?            覆盖用；不给则服务端自行探测，探�
 **`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
 
 拷入位置：`docs` 落 `docs/<basename>`；`assets` 落 `docs/assets/…`——源路径里出现 `/assets/` 就**保留它后面的整段**，否则用 basename。正文里按 `assets/` 打头的相对路径引用。
+
+**`monolingual: true`（2026-07-31 补）**：往折自己的分支上的 `docs/.monolingual` **追加**本折的文档路径（不覆盖 —— 从 main 继承来的条目一条都不能丢，丢了那几折下次又被规则 1 判死），随折 merge 进 main，之后从 main 切的折自动继承。这与 `.payload` 同一个模型。
+
+为什么补：D9 加了这个豁免，但**它从加上起一次都没能用上** —— 那是个仓内文件，而 `open_folder` 只把 `docs` 拷成 `docs/<basename>`，没有任何路径能创建或追加它。第三轮跨系统评审记过「登记表文件够不着」，当时归成理论问题；实际后果是 #31（22 章官制史）长期在巡检里报 22 条假硬伤 —— **一个开始报假红的检查，人就学会忽略它**。
 
 （2026-07-30 修正：上一版写的是一律拍平成 `docs/assets/<basename>`。仓里真实布局有子目录——`docs/assets/shots/annotate.png` 等，而 `docs/zhupi-readme.md` 引用的正是 `assets/shots/setup.png`。zhupi 按文档自身所在目录解析（`render.js:27`），拍平会让这类引用变成断图，而规则 4 会把账算在文档头上、让人去改正文——改完同一篇在两折里说的话就不一样了。）
 

@@ -123,6 +123,8 @@ export const TOOLS = [
       '· `docs` 传**本机绝对路径**，不传全文。**双语一对都要给**（`x.md` + `x.zh-CN.md`）——' +
       '先判原文语言再定翻译方向\n' +
       '· `assets` 是正文引用的图。忘了给 = 他读到断图（体例规则 4 防的就是这个）\n' +
+      '· `monolingual: true` = 这折只有一种语言、不需要译本（如中文读物）——免双语对，' +
+      '会登记进 `docs/.monolingual`。**别拿它绕过「该翻没翻」**：判据是「这东西本来就不该有译本」\n' +
       '· 分支名默认取第一篇文档的 slug；分支已存在会**明着报错**，不覆盖（重复呈折是真事故）\n' +
       '· 体例闸门卡在 commit 之后、push 之前：不合格时**远端一片干净**，什么都没推上去\n' +
       '· 返回的 `desk` 是朱批台深链，**给他这个**；`prUrl` 是载体，别当主输出' +
@@ -148,6 +150,10 @@ export const TOOLS = [
         assets: { type: 'array', items: { type: 'string' }, description: '本机绝对路径，正文引用的图' },
         branch: { type: 'string', description: '覆盖用，默认取第一篇文档的 slug' },
         sessionId: { type: 'string', description: '覆盖用；不给则自行探测，探不到就不埋（绝不编）' },
+        monolingual: {
+          type: 'boolean',
+          description: '这一折是单语读物（不需要译本），免双语对。会登记进 docs/.monolingual，随折 merge 进 main',
+        },
       },
       required: ['title', 'body', 'docs'],
       additionalProperties: false,
@@ -427,7 +433,7 @@ export async function handleTool(
   }
   // ── 写入侧（Phase 3）──
   if (name === 'open_folder') {
-    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'branch', 'sessionId']);
+    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'branch', 'sessionId', 'monolingual']);
     for (const k of ['title', 'branch', 'sessionId'] as const) {
       if (args[k] !== undefined && typeof args[k] !== 'string') {
         throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串，收到 ${JSON.stringify(args[k])}` });
@@ -438,6 +444,9 @@ export async function handleTool(
       if (!Array.isArray(args[k]) || (args[k] as unknown[]).some((x) => typeof x !== 'string')) {
         throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串数组（本机绝对路径），收到 ${JSON.stringify(args[k])}` });
       }
+    }
+    if (args.monolingual !== undefined && typeof args.monolingual !== 'boolean') {
+      throw new ZhupiFailure({ kind: 'badInput', what: `monolingual 得是布尔，收到 ${JSON.stringify(args.monolingual)}` });
     }
     if (typeof args.body !== 'object' || args.body === null || Array.isArray(args.body)) {
       throw new ZhupiFailure({ kind: 'badInput', what: 'body 得是对象：{ destination, directLink, tldr, decisions, howto }' });
@@ -454,6 +463,7 @@ export async function handleTool(
         ...(args.assets !== undefined ? { assets: args.assets as string[] } : {}),
         ...(args.branch !== undefined ? { branch: args.branch as string } : {}),
         ...(args.sessionId !== undefined ? { sessionId: args.sessionId as string } : {}),
+        ...(args.monolingual === true ? { monolingual: true } : {}),
       },
       ref,
     );
