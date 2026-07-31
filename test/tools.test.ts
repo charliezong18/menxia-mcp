@@ -145,7 +145,7 @@ describe('mark_handled 的行为（离线，注入取数口）', () => {
   it('seed 预览里带正文，且**他的朱批要有警告**（标掉等于让他的话消失）', async () => {
     const r = await T({ pr: 9, seed: true });
     expect(r.targets.map((t: any) => t.preview)).toContain('文档是不是有点旧了。');
-    expect(r.hint).toMatch(/他的朱批/);
+    expect(r.hint).toMatch(/他的涂归/);
   });
 
   it('**没有 fromDesk 时也要警告** —— 那条路径生产里 0/16 折触发过，只在它为真时警告等于没护栏', async () => {
@@ -207,7 +207,7 @@ describe('mark_handled 的行为（离线，注入取数口）', () => {
   });
 
   it('不属于这折的 id → 拒，并告诉去哪拿 id', async () => {
-    await expect(T({ pr: 9, ids: [999] })).rejects.toThrow(/没有这些总批.*conversation\[\]\.id/s);
+    await expect(T({ pr: 9, ids: [999] })).rejects.toThrow(/没有这些判.*conversation\[\]\.id/s);
     expect(load(process.env.ZHUPI_STATE_FILE!).store).toEqual({});
   });
 

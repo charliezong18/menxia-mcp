@@ -1,16 +1,16 @@
 [English](SPEC.md) · **中文**
 
-# zhupi-mcp — 御笔朱批的 agent 侧 MCP server
+# zhupi-mcp — 门下的 agent 侧 MCP server
 
 设计定稿 · 2026-07-28
 
-配套产品：[`charliezong18/zhupi`](https://github.com/charliezong18/zhupi)（朱批台，人的一侧）。本仓是 agent 的一侧。
+配套产品：[`charliezong18/zhupi`](https://github.com/charliezong18/zhupi)（门下，人的一侧）。本仓是 agent 的一侧。
 
 ---
 
 ## 1. 为什么做
 
-朱批循环的 agent 侧现在住在 `~/.claude/skills/review-loop/`：一份 8KB 的 SKILL.md 加四个 bash 脚本。2026-07-28 刚做过一轮加固——把体例从散文提醒变成脚本闸门，起因是实测「八折漏三折的回奏对标记、十一篇缺双语对」，结论是**文档提醒治不了漏执行**。
+涂归循环的 agent 侧现在住在 `~/.claude/skills/review-loop/`：一份 8KB 的 SKILL.md 加四个 bash 脚本。2026-07-28 刚做过一轮加固——把体例从散文提醒变成脚本闸门，起因是实测「八折漏三折的回奏对标记、十一篇缺双语对」，结论是**文档提醒治不了漏执行**。
 
 这轮要解决的是那次没解决的两件事。
 
@@ -34,7 +34,7 @@
 
 **不做**：
 
-- **钦此（squash merge）不做工具。** 那是 Charlie 在朱批台上点的动作，agent 侧没有理由持有这个能力。
+- **画可（squash merge）不做工具。** 那是 Charlie 在门下上点的动作，agent 侧没有理由持有这个能力。
 - **交付后的记账不做工具**（tracker 编号、STATUS.md 在途表）——那些散落在不同 vault 位置，属于 skill 的散文职责，不适合固化成 schema。
 - **不改 zhupi 前端。** 本仓与 `charliezong18/zhupi` 只通过 GitHub（PR body 约定、`<!-- happy-session: -->` 标记格式）耦合，不共享代码。
 
@@ -47,7 +47,7 @@
 ### 3.1 `open_folder` — 呈折
 
 ```
-title:      string              奏折标题
+title:      string              敕草标题
 body: {
   destination: string          目的地（进 vault / 发某仓 issue / 发邮件 …）
   directLink:  string?         直达链
@@ -61,7 +61,7 @@ sessionId:  string?            覆盖用；不给则服务端自行探测，探�
 monolingual: boolean?          这折是单语读物，免双语对；登记进 docs/.monolingual
 ```
 
-返回：PR 号、PR URL、朱批台深链 `https://charliezong18.github.io/zhupi/?pr=<n>`、lint 报告。
+返回：PR 号、PR URL、门下深链 `https://charliezong18.github.io/zhupi/?pr=<n>`、lint 报告。
 
 **`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
 
@@ -86,7 +86,7 @@ assets:  string[]?
 
 返回：结构化 findings[]，每条含 `severity: error | warn`、`rule`、`message`、`file`。规则清单见 §5.1。
 
-**能查的规则少一条。** 现有 `folder-lint.sh` 是在奏折仓工作树里跑的，靠 `git diff origin/main...HEAD` 拿本折文档，因而能做「分支基点」检查。`lint_folder` 拿到的是散落在本机的路径、不在任何相关 git 树里，所以它只跑规则 1-4（双语对 / 互链头 / `.payload` 例外 / 断图）。**「分支基点」只在 `open_folder` 内部跑**——那时 server 已经有自己的 worktree，git 上下文齐备。这个差异要在 `lint_folder` 的返回里显式声明，否则会给出「体例合格」的假安心。
+**能查的规则少一条。** 现有 `folder-lint.sh` 是在敕草仓工作树里跑的，靠 `git diff origin/main...HEAD` 拿本折文档，因而能做「分支基点」检查。`lint_folder` 拿到的是散落在本机的路径、不在任何相关 git 树里，所以它只跑规则 1-4（双语对 / 互链头 / `.payload` 例外 / 断图）。**「分支基点」只在 `open_folder` 内部跑**——那时 server 已经有自己的 worktree，git 上下文齐备。这个差异要在 `lint_folder` 的返回里显式声明，否则会给出「体例合格」的假安心。
 
 ### 3.3 `audit_folders` — 存量巡检
 
@@ -142,13 +142,13 @@ body:      string
 
 走 `POST /pulls/{n}/comments/{id}/replies`，接成批注串而不是新开一条。首行的 `**回话**` 前缀由工具焊上（硬约定③），调用方不用自己写；首行是块级构造（围栏 / 列表 / 标题…）时前缀另起一段 —— zhupi 把 reply 正文整个过 markdown-it（`cards.js:48`），同一行会把代码块读成行内 code span。
 
-**~~省掉 `commentId` 就是发总批~~ —— 这条 2026-07-30 作废（Phase 3 实现时）。** 当天 10:54 立的硬约定①（`guard-reply-body.sh`）禁止 agent 往会话区发总批：agent 发的总批与 Charlie 的在 API 里完全同形（共用账号），会变成 `list_folders` 里清不掉的假待办 —— 实测 13 条 `needsReply` 里 7 条是 agent 自己的话，多报 77%。守卫比本节新且有实测数据，按守卫来。折级小结**在聊天里说**，要留档的元数据写进 `docs/<slug>.md` 正文。
+**~~省掉 `commentId` 就是发判~~ —— 这条 2026-07-30 作废（Phase 3 实现时）。** 当天 10:54 立的硬约定①（`guard-reply-body.sh`）禁止 agent 往会话区发判：agent 发的判与 Charlie 的在 API 里完全同形（共用账号），会变成 `list_folders` 里清不掉的假待办 —— 实测 13 条 `needsReply` 里 7 条是 agent 自己的话，多报 77%。守卫比本节新且有实测数据，按守卫来。折级小结**在聊天里说**，要留档的元数据写进 `docs/<slug>.md` 正文。
 
-工具面上**根本没有发总批这个能力**（不是靠描述劝阻）：`WRITE_ALLOWED` 里就没有 `POST /issues/{n}/comments`。
+工具面上**根本没有发判这个能力**（不是靠描述劝阻）：`WRITE_ALLOWED` 里就没有 `POST /issues/{n}/comments`。
 
 另外两条 Phase 3 加的 —— **三个 PreToolUse hook 只挂在 Claude Code 的 Bash 工具上，MCP 调用从它们旁边过去**，那些闸门必须在这一侧再实现一遍，否则 Phase 3 的净效果是「把呈折搬到了一条没有闸门的新路上」：
 
-- **已钦此/已关的折直接拒**（`guard-closed-folder` 那条）。2026-07-29 #23 实测：折已 merged 时 agent 照常回话，命令全部成功而结果是零。
+- **已画可/已关的折直接拒**（`guard-closed-folder` 那条）。2026-07-29 #23 实测：折已 merged 时 agent 照常回话，命令全部成功而结果是零。
 - **`commentId` 若是一条 reply，自动换成它的根**。GitHub 会不会归一化未知，而万一不会，zhupi 会把它当孤儿另起一张没有引文的卡（`anchor.js:165`）。
 
 ---
@@ -167,7 +167,7 @@ MCP 配置里写绝对路径：
 
 **不用 `npm link`。** 2026-07-24 栽过——全局单指针被抢走，线上回退，收拾半天。全局单指针类操作一律不进这个项目。
 
-奏折仓（默认 `charliezong18/review`）与本地 checkout 路径（默认 `~/Developer/review`）走环境变量 `ZHUPI_REVIEW_REPO` / `ZHUPI_REVIEW_PATH`，不硬编码——本仓是公开的。
+敕草仓（默认 `charliezong18/review`）与本地 checkout 路径（默认 `~/Developer/review`）走环境变量 `ZHUPI_REVIEW_REPO` / `ZHUPI_REVIEW_PATH`，不硬编码——本仓是公开的。
 
 ### 4.2 并发：文件锁，不是单进程
 
@@ -285,17 +285,17 @@ zhupi 自己那次 vanilla JS → Preact 迁移的头号风险是「修过的东
 
 `~/.claude/skills/review-loop/guard-pr-create.sh`，挂在全局 settings.json 的 `PreToolUse(Bash)`。命中即拒：
 
-- `gh pr create` 冲着奏折仓去的
+- `gh pr create` 冲着敕草仓去的
 - `gh api -X POST .../pulls` 同上
 
-两条判据：**① 命令段里点名了奏折仓；② 没点名，但 `cd` 进的目录（或会话 cwd）的 origin 是奏折仓**——第二条堵的是最可能的绕法「`cd <worktree> && gh pr create`」。读操作（`pr view` / `pr list` / GET pulls）和别的仓一概不拦。
+两条判据：**① 命令段里点名了敕草仓；② 没点名，但 `cd` 进的目录（或会话 cwd）的 origin 是敕草仓**——第二条堵的是最可能的绕法「`cd <worktree> && gh pr create`」。读操作（`pr view` / `pr list` / GET pulls）和别的仓一概不拦。
 
 拒绝信息指向当时的正确入口——现在指 `open-folder.sh`，Phase 4 后改指 MCP 工具。
 
 **上线过程连踩三次误伤，每次都是同一个病根——把「字符串里出现」当成了「这条命令要执行」。全记在这，因为 MCP 版重写这段逻辑时会原样再踩一遍：**
 
-1. **按命令段判，不按整串判。** 第一版扫整条命令字符串，`gh pr create -R 别的仓 && gh pr view -R 奏折仓` 被误拦——两个关键词分属不同段。改成按 `&& || ; |` 切段后逐段判。
-2. **段首必须真是 gh 调用。** 第二版拦了守卫作者自己的 `git commit`——commit message 里写了那个命令名，而 cwd 恰好在奏折仓 worktree 里，两条判据凑齐。现在会先剥掉前导空白、env 赋值、`bash -c` 包壳、绝对路径前缀，再要求剩下的部分**以 `gh` 开头**。`git commit -m "...gh pr create..."`、`echo`、`grep` 全部放行。
+1. **按命令段判，不按整串判。** 第一版扫整条命令字符串，`gh pr create -R 别的仓 && gh pr view -R 敕草仓` 被误拦——两个关键词分属不同段。改成按 `&& || ; |` 切段后逐段判。
+2. **段首必须真是 gh 调用。** 第二版拦了守卫作者自己的 `git commit`——commit message 里写了那个命令名，而 cwd 恰好在敕草仓 worktree 里，两条判据凑齐。现在会先剥掉前导空白、env 赋值、`bash -c` 包壳、绝对路径前缀，再要求剩下的部分**以 `gh` 开头**。`git commit -m "...gh pr create..."`、`echo`、`grep` 全部放行。
 3. **剥壳的 sed 必须用 `-E`。** BSD sed（macOS 自带）的基本正则不支持 `\|` 交替，写了那条规则等于完全失效——`bash -c '...'` 包壳绕过一路畅通，而且**静默**，只有测试能发现。`folder-lint.sh` 顶部专门警告过同一类坑，还是又踩了一次。
 
 配套的 `guard-pr-create.test.sh` 有 21 条用例（10 条该拦 / 11 条不该拦），改守卫前先跑它。
@@ -350,7 +350,7 @@ zhupi 自己那次 vanilla JS → Preact 迁移的头号风险是「修过的东
 **第三轮改掉的三条规则（都是与 zhupi 实际行为错位）**：
 
 1. **规则 2 从「逐字符」改成「点得到对面」，硬伤降为警告**（写法差异那部分）。
-   实测它正拦着 #12，而 #12 在朱批台上渲染完全正常。
+   实测它正拦着 #12，而 #12 在门下上渲染完全正常。
 2. **规则 4 的图片引用改成相对文档自身目录解析**，与 `zhupi/src/render.js:26` 一致。
    上一版一律按 `docs/` 拼 —— 子目录文档的图 **lint 说在、zhupi 显示断图**，方向是漏报。
 3. **规则 1 新增 `docs/.monolingual` 登记豁免**。修掉老脚本的假通过 bug 之后规则 1

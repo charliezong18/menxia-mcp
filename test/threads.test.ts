@@ -18,8 +18,7 @@ import {
   preview,
   type RawInlineComment,
   type RawIssueComment,
-  type RawReview,
-} from '../src/threads.js';
+  type RawReview, isDeskBody } from '../src/threads.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fx = <T>(name: string): T => JSON.parse(readFileSync(join(here, 'fixtures', name), 'utf8')) as T;
@@ -531,5 +530,21 @@ describe('存量回话靠逐条核过的 id 表认领（第三轮评审）', () 
     ];
     expect(countsOf(buildInlineThreads([rt, old], revs), [])).toEqual({ needsReply: 0, unclear: 0 });
     expect(countsOf(buildInlineThreads([rt, old, his], revs), []).unclear).toBe(1);
+  });
+});
+
+describe('台标新旧并存（2026-07-31 改名，历史折永不重写）', () => {
+  it('DESK_MARK 认新串「门下 · N 条」', () => {
+    expect(isDeskBody('门下 · 4 条')).toBe(true);
+  });
+  it('DESK_MARK 仍认旧串「御笔朱批 · N 条」—— #1–#52 的 review body 里躺的是它', () => {
+    expect(isDeskBody('御笔朱批 · 4 条')).toBe(true);
+  });
+  it('降级串也新旧都认', () => {
+    expect(isDeskBody('以下涂归锚定不到可批注行（或写于旧版本），并入判：')).toBe(true);
+    expect(isDeskBody('以下朱批锚定不到可批注行（或写于旧版本），并入总批：')).toBe(true);
+  });
+  it('不相干的 review body 不算台标', () => {
+    expect(isDeskBody('LGTM')).toBe(false);
   });
 });

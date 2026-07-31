@@ -42,7 +42,7 @@ const SECTIONS: Array<[keyof FolderBody, string]> = [
 // 提取比 zhupi 严（吃不到它故意放行的整条 URL 那条通道），**校验比 zhupi 松**
 // （允许 `_`、`-` 和任意长度）。后者才是真问题：`sessionId` 是可覆盖入参，
 // 传一个带连字符的 UUID 进来，`verifyMarker` 会报 ok、`open_folder` 一个警告都不出，
-// 而朱批台上那个「回奏对」按钮**静默不出现** —— 正是这个文件开头声称在防的那件事。
+// 而门下上那个「回奏对」按钮**静默不出现** —— 正是这个文件开头声称在防的那件事。
 export const MARKER_RE = /<!--\s*happy-session:\s*([^\s>]+)\s*-->/i;
 /** zhupi 认不认这个 id。逐字抄自 `link.js:80`。 */
 export const SESSION_ID_RE = /^[a-z0-9]{16,40}$/i;
@@ -81,14 +81,14 @@ export function buildBody(b: FolderBody, sessionId: string | null): BuiltBody {
     // **埋一个 zhupi 认不出来的 id ≠ 不埋。** 埋了它，按钮照样不出现，
     // 但这边什么都不报 —— 静默指错。宁可不埋并且说出来。
     warnings.push(
-      `会话 id ${JSON.stringify(sessionId)} 不符合朱批台的格式（16–40 位字母数字，见 zhupi link.js:80），` +
+      `会话 id ${JSON.stringify(sessionId)} 不符合门下的格式（16–40 位字母数字，见 zhupi link.js:80），` +
       '本折不埋「回奏对」标记 —— 埋了按钮也不会出现，而且没人会发现',
     );
   } else if (sessionId) {
     text += `\n\n<!-- happy-session: ${sessionId} -->\n`;
   } else {
     // 探不到就不埋，**绝不编**（SPEC §4.4）。按钮不出现而已；静默指错比没有更糟。
-    warnings.push('拿不到 happy 会话 id，本折不埋「回奏对」标记 —— 朱批台上不会有回奏对按钮');
+    warnings.push('拿不到 happy 会话 id，本折不埋「回奏对」标记 —— 门下上不会有回奏对按钮');
   }
   return { text, missing, warnings };
 }

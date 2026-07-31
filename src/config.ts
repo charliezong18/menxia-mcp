@@ -1,4 +1,4 @@
-// 奏折仓是配置不是常量——本仓是公开的，别把私有仓名焊死在代码里。
+// 敕草仓是配置不是常量——本仓是公开的，别把私有仓名焊死在代码里。
 
 import { fail } from './errors.js';
 
@@ -10,7 +10,7 @@ export interface RepoRef {
 
 export const DEFAULT_REVIEW_REPO = 'charliezong18/review';
 
-/** 奏折仓的本地 checkout。**只有 worktree.ts 该用它**（SPEC §4.2）。 */
+/** 敕草仓的本地 checkout。**只有 worktree.ts 该用它**（SPEC §4.2）。 */
 export function reviewPath(env: NodeJS.ProcessEnv = process.env): string {
   const p = (env.ZHUPI_REVIEW_PATH || '').trim();
   if (p) return p;

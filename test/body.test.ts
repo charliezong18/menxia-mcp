@@ -146,7 +146,7 @@ describe('标记格式必须与 zhupi 认的一致（第三轮：跨系统）', 
   it('带连字符的 UUID —— 不埋，且明说按钮不会出现', () => {
     const { text, warnings } = buildBody(full, '4a8b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d');
     expect(text).not.toContain('happy-session');
-    expect(warnings.join()).toContain('朱批台的格式');
+    expect(warnings.join()).toContain('门下的格式');
   });
 
   it('太短的 id —— 不埋', () => {

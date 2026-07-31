@@ -11,7 +11,7 @@
 // 也就是说：老脚本那条路上的全部闸门，对这里一条都不生效。
 // 凡是那些 hook 拦的事，这里必须自己拦一遍 —— 否则 Phase 3 的净效果是
 // 「把呈折搬到了一条没有闸门的新路上」。已经落实的两条：
-//   · 已钦此/已关的折不许回话（guard-closed-folder）→ replyComment 自查 state
+//   · 已画可/已关的折不许回话（guard-closed-folder）→ replyComment 自查 state
 //   · inline 回话首行盖 `**回话**`（guard-reply-body 硬约定③）→ 焊死，缺了自动补
 // 还有一条不适用：guard-pr-create 拦的是「绕过闸门去建 PR」，而这里就是那个闸门本身。
 
@@ -118,7 +118,7 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
       base: 'main',
       body: built.text,
       // **不带 draft。** 2026-07-26 起弃用：私有单人仓里 draft 挡不住任何人，
-      // 却挡住「钦此」按钮要的 squash merge。
+      // 却挡住「画可」按钮要的 squash merge。
     });
   } catch (e) {
     return fail({
@@ -175,7 +175,7 @@ const startsBlock = (first: string, second: string): boolean =>
 /**
  * 首行盖 `**回话**`（硬约定③）。**默认同一行，别空行。**
  *
- * 朱批台自己已经给每条回话打了 `回话 · <login>` 标签（`cards.js:45-49`），reply 正文又走
+ * 门下自己已经给每条回话打了 `回话 · <login>` 标签（`cards.js:45-49`），reply 正文又走
  * markdown 渲染 —— 写成 `**回话**\n\n正文` 会渲染出独占一行的加粗「回话」，
  * 在他 300px 宽的批注栏里是三层重复（标签 / 前缀 / 判词）。
  *
@@ -206,7 +206,7 @@ export function withReplyPrefix(body: string): string {
 
 export interface ReplyInput {
   pr: number;
-  /** **必填。** 省掉它在老 SPEC 里是「发总批」，那条路已经关了 —— 见下。 */
+  /** **必填。** 省掉它在老 SPEC 里是「发判」，那条路已经关了 —— 见下。 */
   commentId: number;
   body: string;
 }
@@ -214,7 +214,7 @@ export interface ReplyInput {
 export async function replyComment(input: ReplyInput, ref: RepoRef = reviewRepo()): Promise<unknown> {
   if (!input.body?.trim()) return fail({ kind: 'badInput', what: 'body 不能空' });
 
-  // 已钦此/已关的折不许动（guard-closed-folder 的那条，MCP 侧自己拦一遍）。
+  // 已画可/已关的折不许动（guard-closed-folder 的那条，MCP 侧自己拦一遍）。
   // 2026-07-29 #23 实测：他说「批完了」时折已 merged，agent 照常改稿推分支回话，
   // **命令全部成功而结果是零** —— 他看到的仍是旧版，反馈指向一个不存在的问题。
   const pr = await get<{ state: string; merged_at: string | null }>(
@@ -225,7 +225,7 @@ export async function replyComment(input: ReplyInput, ref: RepoRef = reviewRepo(
   if (pr.state !== 'open') {
     return fail({
       kind: 'badInput',
-      what: `#${input.pr} 已经${pr.merged_at ? '钦此' : '关掉'}了，回话落在没人看的已关页面上`,
+      what: `#${input.pr} 已经${pr.merged_at ? '画可' : '关掉'}了，回话落在没人看的已关页面上`,
       hint: '要补内容一律另开一折（SKILL.md :101）。命令会「全部成功」而结果是零 —— 2026-07-29 #23 就是这么绕了一大圈。',
     });
   }
@@ -292,15 +292,15 @@ export async function auditFolders(ref: RepoRef = reviewRepo()): Promise<{ repo:
     const problems: string[] = [];
     // **查值，不是查前缀。** 老脚本 `audit-folders.sh:32` 是 `grep -q 'happy-session:'`，
     // 于是 `<!-- happy-session: -->` 和一个格式不对的 id 都算「合体例」，
-    // 而朱批台上那个按钮根本不会出现（zhupi `link.js:88` 过不了 SESSION_ID 就返回 null）。
+    // 而门下上那个按钮根本不会出现（zhupi `link.js:88` 过不了 SESSION_ID 就返回 null）。
     // 巡检存在的全部意义是查出这类漏执行，报个假绿等于没跑（第三轮评审）。
     const marked = MARKER_RE.exec(p.body ?? '')?.[1];
     if (!marked) {
       problems.push('缺「回奏对」标记 —— 不补：只能补成当前会话的 id，那是编一个（§4.4）');
     } else if (!/^https:\/\//i.test(marked) && !SESSION_ID_RE.test(marked)) {
-      problems.push(`「回奏对」标记里的 ${JSON.stringify(marked)} 朱批台认不出来（要 16–40 位字母数字），按钮不会出现`);
+      problems.push(`「回奏对」标记里的 ${JSON.stringify(marked)} 门下认不出来（要 16–40 位字母数字），按钮不会出现`);
     }
-    if (p.draft) problems.push(`还是 draft（挡住钦此的 squash merge）—— 跑 gh pr ready ${p.number} -R ${ref.slug}`);
+    if (p.draft) problems.push(`还是 draft（挡住画可的 squash merge）—— 跑 gh pr ready ${p.number} -R ${ref.slug}`);
 
     let findings: Finding[] = [];
     let lintRan = true;

@@ -2,24 +2,28 @@
 // 无 IO、无网络 import。这是 Phase 1 唯一「写错了不报错、只是答案悄悄不对」的模块。
 //
 // 作者判定的依据见 design §3.0：
-//   zhupi 提交批注走 POST /pulls/{n}/reviews，review body 固定为「御笔朱批 · N 条」；
+//   zhupi 提交批注走 POST /pulls/{n}/reviews，review body 固定为「门下 · N 条」；
 //   agent 回话走 /comments/{id}/replies，GitHub 为它自动建一个 body 为空的 review。
 //   而 zhupi 没有任何发 reply 的代码路径。
 // 所以 pull_request_review_id 回查 review body 即可判作者，且追溯有效。
 
-export const DESK_MARK = /^御笔朱批/;
+// 新旧两种都认，**永久**：2026-07-31 阅读台把这串从「御笔朱批 · N 条」改成「门下 · N 条」，
+// 而 #1–#52 那批历史折的 review body 里躺的仍是旧串，且永远不会被重写。
+// 只认一种 = 要么认不出新批注，要么认不出历史批注（fromDesk 静默变 false，他的话就没人当他的了）。
+export const DESK_MARK = /^(门下|御笔朱批)/;
 
 /**
  * zhupi 的降级路径（zhupi/src/ui.js:545-553）：草稿写于旧版本（`stale = d.ref !== ref`）
- * 或行号锚不到可批注行时，那些朱批**不进 inline，被塞进 review body**，前缀是这一句。
+ * 或行号锚不到可批注行时，那些涂归**不进 inline，被塞进 review body**，前缀是这一句。
  *
  * 两个后果，都严重且静默：
- *   ① 只要有一条降级，整个 review body 就不再是「御笔朱批 · N 条」——
- *      这一批里**成功锚上的**批注会被判成非朱批台 → answered=true → 看不见；
+ *   ① 只要有一条降级，整个 review body 就不再是「门下 · N 条」——
+ *      这一批里**成功锚上的**批注会被判成非门下 → answered=true → 看不见；
  *   ② 若全部降级，review 里零条 comment，他写的东西只存在于 body 里 → 工具直接说「这折没事」。
  * 而「隔夜草稿 + agent 推过改版」正是最常见的形态。
  */
-export const DESK_FALLBACK_MARK = /^以下朱批锚定不到可批注行/;
+// 同上，新旧并存：旧串是「以下朱批锚定不到可批注行」。
+export const DESK_FALLBACK_MARK = /^以下(涂归|朱批)锚定不到可批注行/;
 
 export const isDeskBody = (body: string): boolean => DESK_MARK.test(body) || DESK_FALLBACK_MARK.test(body);
 
@@ -54,7 +58,7 @@ export interface RawIssueComment {
   id: number;
   body: string;
   created_at: string;
-  /** 服务端最后修改时间。**必须取**：他原地编辑总批时 id 不变，只有这个字段会动。 */
+  /** 服务端最后修改时间。**必须取**：他原地编辑判时 id 不变，只有这个字段会动。 */
   updated_at?: string | null;
   user?: { login?: string } | null;
 }
@@ -65,7 +69,7 @@ export interface InlineReply {
   id: number;
   body: string;
   createdAt: string;
-  /** 这句是不是他从朱批台说的（true = 他的反驳/追问，不是我方回话） */
+  /** 这句是不是他从门下说的（true = 他的反驳/追问，不是我方回话） */
   fromDesk: boolean;
   /** true = 确定是我方回的（盖了 `**回话**` 前缀） */
   ours?: boolean;
@@ -77,7 +81,7 @@ export interface InlineThread {
   /** 批注后若推了改版，GitHub 对 outdated 批注返回 line: null，此时回退 original_line */
   line: number | null;
   startLine: number | null;
-  /** 是不是从朱批台呈上来的（= 他的批注）。false 表示这条根批注是我方自己发的。 */
+  /** 是不是从门下呈上来的（= 他的批注）。false 表示这条根批注是我方自己发的。 */
   fromDesk: boolean;
   outdated: boolean;
   quote: string;
@@ -96,7 +100,7 @@ export interface InlineThread {
  * v3 之前这里是 `inferred | unknown` 的位置推断（`i < len-1 → inferred`）。
  * 那个推断成立的前提是「会话区是双方 channel」——agent 不再发折级小结之后
  * 它变成单方收件箱，「后面还有话」只意味着 Charlie 又说了一句，
- * 于是**他连发两条总批，前一条会被静默判成已答**（漏报）。所以换成本地记录，不再猜。
+ * 于是**他连发两条判，前一条会被静默判成已答**（漏报）。所以换成本地记录，不再猜。
  */
 export type ConversationVerdict = 'handled' | 'pending';
 
@@ -105,13 +109,13 @@ export interface ConversationItem {
   body: string;
   author: string | null;
   createdAt: string;
-  /** true = 确定是他发的（zhupi 降级并入总批的朱批） */
+  /** true = 确定是他发的（zhupi 降级并入判的涂归） */
   fromDesk?: boolean;
   /** handled = 我方记过已处理；pending = 要处理。不再是推断。 */
   answered: ConversationVerdict;
   /** 服务端最后修改时间，`mark_handled` 要拿它记水位 */
   updatedAt: string;
-  /** true = body 被截断了（超长总批）。要全文走 `gh api` */
+  /** true = body 被截断了（超长判）。要全文走 `gh api` */
   bodyTruncated?: boolean;
   /** 原始长度，配 bodyTruncated 一起给 */
   bodyLength?: number;
@@ -119,9 +123,9 @@ export interface ConversationItem {
 
 export interface Counts {
   /**
-   * 要处理：他发的、没有我方回话的 inline 批注 + 没记过已处理的总批。
+   * 要处理：他发的、没有我方回话的 inline 批注 + 没记过已处理的判。
    *
-   * **总批那一半会多报**：共用同一个 GitHub 账号，agent 历史上发的总批也算在里面，
+   * **判那一半会多报**：共用同一个 GitHub 账号，agent 历史上发的判也算在里面，
    * API 分不出来。别写「确定」——第一轮评审指出描述这么写会让模型跳过判断。
    * 多报只是让人多看几条（attention 带正文预览），比漏报便宜得多。
    */
@@ -160,7 +164,7 @@ export function reviewBodyById(reviews: RawReview[]): Map<number, string> {
   return m;
 }
 
-/** 这条 inline comment 是不是从朱批台呈上来的（= Charlie 的批注）。 */
+/** 这条 inline comment 是不是从门下呈上来的（= Charlie 的批注）。 */
 export function isFromDesk(c: RawInlineComment, bodies: Map<number, string>): boolean {
   const rid = c.pull_request_review_id;
   if (rid == null) return false;
@@ -168,8 +172,8 @@ export function isFromDesk(c: RawInlineComment, bodies: Map<number, string>): bo
 }
 
 /**
- * 被 zhupi 降级塞进 review body 的朱批。zhupi 自己的说法就是「并入总批」，
- * 所以按总批处理——而且这类**确定是他发的**（带 zhupi 的前缀），作者不用猜。
+ * 被 zhupi 降级塞进 review body 的涂归。zhupi 自己的说法就是「并入判」，
+ * 所以按判处理——而且这类**确定是他发的**（带 zhupi 的前缀），作者不用猜。
  */
 export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
   return reviews
@@ -177,11 +181,11 @@ export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
     .map((r) => ({
       id: r.id,
       // 整条模板都剥掉，不只是开头那截。第三轮评审实测残留的
-      // 「（或写于旧版本），并入总批：」占 preview 前 80 字的 41%，
+      // 「（或写于旧版本），并入判：」占 preview 前 80 字的 41%，
       // 而 preview 是 seed 决策唯一的依据面。
       body: (r.body ?? '')
-        .replace(/^以下朱批锚定不到可批注行（或写于旧版本）[，,]\s*并入总批[：:]\s*/, '（朱批锚不到行，zhupi 并入总批）\n\n')
-        .replace(DESK_FALLBACK_MARK, '（朱批锚不到行，zhupi 并入总批）'),
+        .replace(/^以下(?:涂归|朱批)锚定不到可批注行（或写于旧版本）[，,]\s*并入(?:判|总批)[：:]\s*/, '（涂归锚不到行，zhupi 并入判）\n\n')
+        .replace(DESK_FALLBACK_MARK, '（涂归锚不到行，zhupi 并入判）'),
       created_at: r.submitted_at ?? '',
       user: null,
     }));
@@ -275,7 +279,7 @@ export function buildInlineThreads(
   headSha?: string | null,
 ): InlineThread[] {
   const bodies = reviewBodyById(reviews);
-  // **所有**根批注都建串，不只是朱批台来的。
+  // **所有**根批注都建串，不只是门下来的。
   // v1 只保留 desk 根，导致「我方发了根批注、他在网页/手机上回了一句」时，
   // 他那句话在输出里彻底不存在——那是丢数据，不只是计数错（评审实证）。
   const roots = comments.filter(isRoot);
@@ -353,7 +357,7 @@ export function buildInlineThreads(
   return [...built, ...orphanThreads];
 }
 
-// —— 总批 ——
+// —— 判 ——
 
 export function classifyConversation(
   items: RawIssueComment[],
@@ -376,10 +380,10 @@ export function classifyConversation(
 }
 
 /**
- * 总批的身份清单：id + **updated_at**（没有就退回 created_at）。
+ * 判的身份清单：id + **updated_at**（没有就退回 created_at）。
  *
  * 单列成函数是因为这是个接缝：第二轮评审把它改成用 `created_at` 之后
- * 175 条测试全绿，而真数据上「他编辑过的总批」立刻被吞回去 —— 原漏报复现。
+ * 175 条测试全绿，而真数据上「他编辑过的判」立刻被吞回去 —— 原漏报复现。
  */
 export function conversationEntriesOf(items: RawIssueComment[]): { id: number; updatedAt: string }[] {
   return items.map((c) => ({ id: c.id, updatedAt: c.updated_at ?? c.created_at }));
@@ -389,12 +393,12 @@ export function conversationEntriesOf(items: RawIssueComment[]): { id: number; u
 
 export function countsOf(inline: InlineThread[], conversation: ConversationItem[]): Counts {
   return {
-    // 总批现在是确定的：没记过已处理就是要处理，跟谁发的无关。
+    // 判现在是确定的：没记过已处理就是要处理，跟谁发的无关。
     needsReply:
       inline.filter((t) => t.fromDesk && t.replies.length === 0).length +
       conversation.filter((c) => c.answered === 'pending').length,
-    // 判不了的只剩两类 inline：① 非朱批台来源的根批注（他从 GitHub 网页发的，与我方同形）；
-    // ② 朱批根批注有回话、**且最后一条没盖 `**回话**` 前缀**——那句到底是我方回的
+    // 判不了的只剩两类 inline：① 非门下来源的根批注（他从 GitHub 网页发的，与我方同形）；
+    // ② 涂归根批注有回话、**且最后一条没盖 `**回话**` 前缀**——那句到底是我方回的
     //    还是他从网页追的，判不了。第三轮评审指出这一类最坏：他一开口，
     //    串反而变成「已回」，工具比他不说话时更安静。
     //    盖了前缀的确定是我方 → 不再进 unclear（这就是那条约定的兑现处）。
@@ -411,10 +415,10 @@ export function attentionOf(inline: InlineThread[], conversation: ConversationIt
     if (t.fromDesk && t.replies.length === 0) {
       out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'no-reply' });
     } else if (!t.fromDesk) {
-      // 非朱批台来源：他从 GitHub 网页发的批注与我方自己发的完全同形，判不了。
+      // 非门下来源：他从 GitHub 网页发的批注与我方自己发的完全同形，判不了。
       out.push({ kind: 'inline', id: t.id, preview: preview(t.body), createdAt: t.createdAt, why: 'last-word-unclear' });
     } else if (t.replies.length > 0 && !t.replies[t.replies.length - 1]!.ours) {
-      // 朱批根 + 有回话且没盖前缀：最后那句到底是我方回的还是他从网页追的，判不了。
+      // 涂归根 + 有回话且没盖前缀：最后那句到底是我方回的还是他从网页追的，判不了。
       // 预览取**最后一条回话**——「我方回话：已改」和「不对，我说的是第二段」一眼可分。
       const last = t.replies[t.replies.length - 1]!;
       out.push({ kind: 'inline', id: t.id, preview: preview(last.body), createdAt: last.createdAt, why: 'reply-author-unclear' });
