@@ -62,7 +62,7 @@ export interface BuiltBody {
   warnings: string[];
 }
 
-export function buildBody(b: FolderBody, sessionId: string | null): BuiltBody {
+export function buildBody(b: FolderBody, sessionId: string | null, relMarker?: string | null): BuiltBody {
   const warnings: string[] = [];
   const missing: string[] = [];
   const parts: string[] = [];
@@ -77,6 +77,9 @@ export function buildBody(b: FolderBody, sessionId: string | null): BuiltBody {
   }
 
   let text = parts.join('\n\n');
+  // 折务追踪的关系标记（#61）：与 happy-session 同族，机器可读、读者不可见。
+  // 排在 happy-session 之前 —— 两个正则都全文扫，顺序只为肉眼读 diff 时稳定。
+  if (relMarker) text += `\n\n${relMarker}`;
   if (sessionId && !SESSION_ID_RE.test(sessionId)) {
     // **埋一个 zhupi 认不出来的 id ≠ 不埋。** 埋了它，按钮照样不出现，
     // 但这边什么都不报 —— 静默指错。宁可不埋并且说出来。

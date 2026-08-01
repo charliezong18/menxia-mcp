@@ -77,9 +77,16 @@ export function installReadOnlyGate(oc: Octokit): Octokit {
 //     markPullRequestReadyForReview；而把 `POST /graphql` 放进白名单等于开放全部 mutation，
 //     白名单当场失去意义。改成报一句 `gh pr ready <n>` 让人自己跑。
 // 没有用户的路由不留在白名单里 —— 留着就是一个随时会被顺手用上的写口。
+// 2026-07-31 从两条到四条：折务追踪（#61 批定）要贴 label。
+//   · `POST …/labels` —— 按词表定色补建缺的 label（尽力而为，失败只影响颜色）
+//   · `POST …/issues/{issue_number}/labels` —— 把 track 的三类 label 贴上折
+//     （实测它会自动建缺失的 label，只是落默认灰 —— 所以上一条才是「尽力而为」）
+// 仍然没有 PATCH/PUT/DELETE：label 的摘除/改名不给 agent，那是处置动作，归 Charlie。
 export const WRITE_ALLOWED: readonly string[] = [
   'POST /repos/{owner}/{repo}/pulls',
   'POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies',
+  'POST /repos/{owner}/{repo}/labels',
+  'POST /repos/{owner}/{repo}/issues/{issue_number}/labels',
 ];
 
 /**

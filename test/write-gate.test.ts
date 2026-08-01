@@ -42,10 +42,14 @@ describe('写入面的大小被钉死', () => {
   // 补标记只能补成当前会话的 id（编一个，§4.4 禁止），draft 转正 REST 根本不支持
   // （只能走 GraphQL，而 `POST /graphql` 进白名单等于开放全部 mutation）。
   // 没有用户的路由不留着。
-  it('白名单恰好两条，且就是这两条', () => {
+  // 2026-07-31 又从两条到四条：折务追踪（#61）的 label 两路。这条断言的意义
+  // 就是「加路由必须被人看见一次」—— 本次被看见于 review #61 的批定。
+  it('白名单恰好四条，且就是这四条', () => {
     expect([...WRITE_ALLOWED]).toEqual([
       'POST /repos/{owner}/{repo}/pulls',
       'POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies',
+      'POST /repos/{owner}/{repo}/labels',
+      'POST /repos/{owner}/{repo}/issues/{issue_number}/labels',
     ]);
   });
 

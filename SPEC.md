@@ -59,9 +59,19 @@ docs:       string[]           Local absolute paths, both of the bilingual pair 
 assets:     string[]?          Local absolute paths, images referenced in the text
 sessionId:  string?            For override; if absent, the server auto-detects, if it can't detect it won't embed
 monolingual: boolean?          This folder is a monolingual reading, exempt from the bilingual pair; registered in docs/.monolingual
+track: {                       Folder tracking (review #61, approved 2026-07-31). Omitting it only warns — but don't let new folders go in bare
+  proj: string | string[]      Project slug(s), lowercase alnum-dash; check existing proj: labels before coining a new word
+  kind: enum                   拍板 / 评审 / 设计 / 读物 / 交付 / 参考 — primary purpose, pick one
+  wait: enum?                  你拍 / 你读 / agent / 闲; derived when absent: has decisions → 你拍, 读物 → 闲, else 你读
+  needs: int[]?                Folders whose conclusions this one depends on
+  supersedes: int[]?           Folders this one covers/replaces — deal with them when this folder is merged (the #58 zombie lesson)
+  unblocks: string?            One phrase: what merging releases (≤120 chars, no semicolons/newlines/-->)
+}
 ```
 
 Returns: PR number, PR URL, deep link to the annotation desk (zhupi) `https://charliezong18.github.io/menxia/?pr=<n>`, lint report.
+
+**`track` (added 2026-07-31, review #61)**: applies three label families (`proj:` / `kind:` / `wait:`, vocabulary constants live **only** in `src/track.ts` — the rename lesson: cross-system contracts are bare strings, hard-code both ends and they fail silently; the reader recognizes prefixes only) and welds a trailing relation marker `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->` into the PR body, same family as `happy-session`. Label application is two-step: best-effort create missing labels with the vocabulary colors, then one `POST …/issues/{n}/labels` (which auto-creates any stragglers in default gray — verified against the real repo 2026-07-31). Label failures are warnings, never errors — the folder is already up; conflating the two makes callers re-submit.
 
 **`docs` passes paths, not full text**, this is deliberate. Running on the same machine, the server copies files into the worktree it manages; the agent never touches `~/Developer/review` — parallel trampling is exactly what blocks execution. Passing full text via tool arguments not only wastes tokens, but also keeps the agent in the mental model of "I can write into that repo myself".
 
@@ -94,14 +104,14 @@ Returns: structured findings[], each containing `severity: error | warn`, `rule`
 (No parameters)
 ```
 
-Returns: the house style gaps of each folder + return-to-session markers + draft status. **Strictly read-only.**
+Returns: the house style gaps of each folder + return-to-session markers + draft status, plus per-folder `trackNotes` — the four tracking checks (review #61): ① zombie candidates (a merged folder declared `supersedes` over a still-open one), ② dependencies unlocked (`needs` targets now merged), ③ `wait:` drift (labeled "waiting on him" while needsReply > 0 — actually waiting on an agent), ④ merge-ready candidates (he engaged — provable `fromDesk` only, anything else over-reports under the shared account — and every comment is handled). `trackNotes` is separate from `problems`: "dependency unlocked" is good news, not a defect. Counts come from the same `readAll` path the listing tools use — never a second implementation (design §2). If the extra material (closed list, counts) can't be fetched, the four checks degrade to a note and the rest of the audit still runs. **Strictly read-only** — disposal (close / merge / relabel) always waits for Charlie.
 
 **~~`fix`~~ — upon implementation on 2026-07-30, neither of the two things could be done, so this parameter was removed.**
 
 - **Backfilling return-to-session markers**: Can only backfill the **current** session's id, which is not the session that submitted this folder — meaning inventing one. This directly contradicts [§4.4](#44-probing-the-return-to-session-marker) "if you can't detect it, don't embed it, never invent one; silent misdirection is worse than nothing", and the consequence is the button sends Charlie into an irrelevant session. The old script `audit-folders.sh:38` backfilled exactly like this.
 - **Promoting draft to ready**: GitHub REST's `PATCH /pulls/{n}` **does not accept the `draft` field**, leaving GraphQL's `markPullRequestReadyForReview` as the only option; but putting `POST /graphql` into the write allowlist equates to opening up all mutations (deleting repos and merging folders all go through that single endpoint), rendering the allowlist meaningless on the spot. Changed to printing `gh pr ready <n>` for humans to run themselves.
 
-Corollary: `PATCH /pulls/{n}` has no users left and is removed from the write allowlist — **this server can only send two types of write requests in total**: create folder, reply.
+Corollary: `PATCH /pulls/{n}` has no users left and is removed from the write allowlist — this server could only send two types of write requests: create folder, reply. (2026-07-31: folder tracking #61 added the two label routes — create label, apply labels — bringing the total to **four**. Still no PATCH/PUT/DELETE: removing/renaming labels is a disposal action, and disposal belongs to Charlie.)
 
 Marker checks examine the **value**, not the prefix: `<!-- happy-session: -->` and incorrectly formatted ids both fail to render the button on the zhupi side (`link.js:88`); checking only the prefix equals reporting a false green. The `grep -q 'happy-session:'` in the old script `audit-folders.sh:32` has exactly this flaw.
 

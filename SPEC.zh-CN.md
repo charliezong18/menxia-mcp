@@ -59,9 +59,19 @@ docs:       string[]           本机绝对路径，双语一对都要给
 assets:     string[]?          本机绝对路径，正文引用的图
 sessionId:  string?            覆盖用；不给则服务端自行探测，探不到就不埋
 monolingual: boolean?          这折是单语读物，免双语对；登记进 docs/.monolingual
+track: {                       折务追踪（review #61 批定，2026-07-31）。不给只警告——但新折别裸奔
+  proj: string | string[]      项目 slug（小写字母数字连字符）；起新词前先查现有 proj: labels
+  kind: enum                   拍板 / 评审 / 设计 / 读物 / 交付 / 参考——主用途取一
+  wait: enum?                  你拍 / 你读 / agent / 闲；缺省按规则推：有待拍板段→你拍，读物→闲，其余→你读
+  needs: int[]?                本折依赖哪些折的结论
+  supersedes: int[]?           本折盖掉/取代哪些折——画可本折时要随手处置它们（#58 僵尸折的教训）
+  unblocks: string?            画可后解锁什么，一句话（≤120 字，禁分号/换行/-->）
+}
 ```
 
 返回：PR 号、PR URL、门下深链 `https://charliezong18.github.io/menxia/?pr=<n>`、lint 报告。
+
+**`track`（2026-07-31 补，review #61）**：贴三类 label（`proj:` / `kind:` / `wait:`，词表常量**只**活在 `src/track.ts` —— 改名的教训：跨系统契约是裸字符串，两头写死必静默失效；阅读器只认前缀）＋ 往 PR body 尾部焊关系标记 `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->`，与 `happy-session` 同族。贴 label 分两步：先按词表定色尽力补建缺的，再一次 `POST …/issues/{n}/labels`（它会把漏网的自动建成默认灰 —— 2026-07-31 对真仓实测）。label 失败只出 warning 绝不报错 —— 折已经呈上去了，把两件事说成一件会引人重呈一折。
 
 **`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
 
@@ -94,14 +104,14 @@ assets:  string[]?
 （无入参）
 ```
 
-返回：每折的体例缺口 + 回奏对标记 + draft 状态。**纯只读。**
+返回：每折的体例缺口 + 回奏对标记 + draft 状态，外加每折的 `trackNotes` —— 折务四检（review #61）：①僵尸候选（已画可折声明 `supersedes` 的折还开着）②依赖已解锁（`needs` 的折已画可）③`wait:` 漂移（标着「等你」而 needsReply>0 —— 其实在等 agent）④可画可候选（他批过 —— 只认 `fromDesk` 确证，共用账号下别的判据都多报 —— 且批注全处理完）。`trackNotes` 与 `problems` 分开：「依赖已解锁」是好消息不是毛病。计数走列折工具同一条 `readAll` 路径，不另算一遍（design §2）；补充材料（closed 清单、计数）拿不到时四检降级成一条备注、其余巡检照常。**纯只读** —— 处置（close / 画可 / 摘 label）永远等 Charlie。
 
 **~~`fix`~~ —— 2026-07-30 实现时两件事都不能做，于是这个参数没有了。**
 
 - **补回奏对标记**：只补得成**当前**会话的 id，而那不是呈这折的那个会话 —— 是编一个。与 [§4.4](#44-回奏对标记的探测)「探不到就不埋，绝不编；静默指错比没有更糟」直接矛盾，后果是按钮把 Charlie 送进一个不相干的会话。老脚本 `audit-folders.sh:38` 就是这么补的。
 - **draft 转正**：GitHub REST 的 `PATCH /pulls/{n}` **不接受 `draft` 字段**，只能走 GraphQL 的 `markPullRequestReadyForReview`；而把 `POST /graphql` 放进写白名单等于开放全部 mutation（删仓、合折都走那一个端点），白名单当场失去意义。改成报一句 `gh pr ready <n>` 让人自己跑。
 
-连带：`PATCH /pulls/{n}` 没有用户了，从写白名单删掉 —— **这个 server 总共只能发两种写请求**：建折、回话。
+连带：`PATCH /pulls/{n}` 没有用户了，从写白名单删掉 —— 这个 server 一度只能发两种写请求：建折、回话。（2026-07-31：折务追踪 #61 加了 label 两路 —— 建 label、贴 label —— 总数到**四条**。仍然没有 PATCH/PUT/DELETE：摘 label、改名是处置动作，处置归 Charlie。）
 
 标记检查查的是**值**不是前缀：`<!-- happy-session: -->` 和格式不对的 id 在 zhupi 那边都渲染不出按钮（`link.js:88`），只查前缀等于报假绿。老脚本 `audit-folders.sh:32` 的 `grep -q 'happy-session:'` 就是这个毛病。
 

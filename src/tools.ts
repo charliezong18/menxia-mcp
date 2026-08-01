@@ -13,6 +13,7 @@ import { hasHard, lint } from './lint.js';
 import { NotAGitWorktree, collect, dirtyDocs } from './snapshot.js';
 import { auditFolders, openFolder, replyComment } from './submit.js';
 import type { FolderBody } from './body.js';
+import { KIND_VALUES, WAIT_VALUES, validateTrack, type TrackInput } from './track.js';
 
 const STATE_VALUES = ['open', 'merged'] as const;
 type State = (typeof STATE_VALUES)[number];
@@ -154,6 +155,33 @@ export const TOOLS = [
           type: 'boolean',
           description: '这一折是单语读物（不需要译本），免双语对。会登记进 docs/.monolingual，随折 merge 进 main',
         },
+        track: {
+          type: 'object',
+          description:
+            '折务追踪（review #61）：贴 proj/kind/wait 三类 label + 焊折间关系标记。' +
+            '**新折都该带**——不带只警告，但门下分组会把它落到「未标注」',
+          properties: {
+            proj: {
+              description:
+                '项目 slug，string 或 string[]（小写字母数字连字符，与分支名同规）。' +
+                '起新词前先查现有 proj: labels，别造同义词；跨项目折给多个，第一个是主项目',
+            },
+            kind: { type: 'string', enum: [...KIND_VALUES], description: '主用途，取一' },
+            wait: {
+              type: 'string',
+              enum: [...WAIT_VALUES],
+              description: '等谁。不给按规则推：有「待你拍板」段→你拍；读物→闲；其余→你读',
+            },
+            needs: { type: 'array', items: { type: 'integer' }, description: '本折依赖哪些折的结论' },
+            supersedes: {
+              type: 'array',
+              items: { type: 'integer' },
+              description: '本折盖掉/取代哪些折——画可本折时要随手处置它们（#58 僵尸折的教训）',
+            },
+            unblocks: { type: 'string', description: '画可后解锁什么，一句话（≤120 字，禁分号/换行/-->）' },
+          },
+          additionalProperties: false,
+        },
       },
       required: ['title', 'body', 'docs'],
       additionalProperties: false,
@@ -184,7 +212,11 @@ export const TOOLS = [
   {
     name: 'audit_folders',
     description:
-      '存量巡检：扫所有 open 折，报「回奏对」标记、draft 状态、体例三类缺口。**纯只读，不改任何东西。**\n' +
+      '存量巡检：扫所有 open 折，报「回奏对」标记、draft 状态、体例三类缺口，' +
+      '外加折务四检（#61）进 `trackNotes`：①僵尸候选（已画可折声明盖掉的还开着）' +
+      '②依赖已解锁（needs 的折画可了）③wait 漂移（标着「等你」实际在等 agent）' +
+      '④可画可候选（他批过且批注全处理完——报出来等他一句「画可」）。**纯只读，不改任何东西。**\n' +
+      'trackNotes 与 problems 分开：「依赖已解锁」是好消息不是毛病。处置（close/画可/摘 label）永远等 Charlie。\n' +
       '体例那部分调的是 lint_folder 同一个核（同一折两边判定必须一致）。\n' +
       '为什么没有 --fix：补标记只能补成**当前**会话的 id，那不是呈这折的那个会话，是编一个；' +
       'draft 转正 REST 不支持（只能 GraphQL，而那等于开放全部写操作）。' +
@@ -433,7 +465,7 @@ export async function handleTool(
   }
   // ── 写入侧（Phase 3）──
   if (name === 'open_folder') {
-    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'branch', 'sessionId', 'monolingual']);
+    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'branch', 'sessionId', 'monolingual', 'track']);
     for (const k of ['title', 'branch', 'sessionId'] as const) {
       if (args[k] !== undefined && typeof args[k] !== 'string') {
         throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串，收到 ${JSON.stringify(args[k])}` });
@@ -455,6 +487,17 @@ export async function handleTool(
     // 而缺段只警告不拦，于是折照样呈上去、他照样看不到「待你拍板」。
     const bodyKeys = ['destination', 'directLink', 'tldr', 'decisions', 'howto'];
     rejectUnknownKeys('open_folder 的 body', args.body as Record<string, unknown>, bodyKeys);
+    // track 的校验也在任何网络/fs 动作之前 —— 写错 kind 不该先付一次拷文件、开 worktree 的代价。
+    let track: TrackInput | undefined;
+    if (args.track !== undefined) {
+      if (typeof args.track !== 'object' || args.track === null || Array.isArray(args.track)) {
+        throw new ZhupiFailure({ kind: 'badInput', what: 'track 得是对象：{ proj, kind, wait?, needs?, supersedes?, unblocks? }' });
+      }
+      rejectUnknownKeys('open_folder 的 track', args.track as Record<string, unknown>, [
+        'proj', 'kind', 'wait', 'needs', 'supersedes', 'unblocks',
+      ]);
+      track = validateTrack(args.track as Record<string, unknown>, args.body as FolderBody);
+    }
     return openFolder(
       {
         title: args.title as string,
@@ -464,6 +507,7 @@ export async function handleTool(
         ...(args.branch !== undefined ? { branch: args.branch as string } : {}),
         ...(args.sessionId !== undefined ? { sessionId: args.sessionId as string } : {}),
         ...(args.monolingual === true ? { monolingual: true } : {}),
+        ...(track !== undefined ? { track } : {}),
       },
       ref,
     );

@@ -23,6 +23,8 @@ import { detectSessionId } from './session.js';
 import { stageFolder, type Staged } from './worktree.js';
 import { collect } from './snapshot.js';
 import { hasHard, lint, type Finding } from './lint.js';
+import { readAll, isFolderError } from './folders.js';
+import { buildRelMarker, labelColor, labelDesc, labelsFor, trackAudit, type TrackFolderState, type TrackInput } from './track.js';
 
 // 2026-07-31 仓与 Pages 由 zhupi 改名 menxia。旧址 /zhupi/ 现在是一个只做转发的壳仓，
 // 原样带走 query 与 hash，所以历史折 body 里的 directLink 仍然点得开。新折一律发新址。
@@ -51,6 +53,11 @@ export interface OpenFolderInput {
    * 会往 `docs/.monolingual` 追加本折的文档路径，随折 merge 进 main。
    */
   monolingual?: boolean;
+  /**
+   * 折务追踪（#61）：proj/kind/wait 三类 label + 折间关系标记。
+   * 到这里的已经是 tools 层校验过的 —— 缺省不拦，只出 warning（新折别裸奔）。
+   */
+  track?: TrackInput;
 }
 
 export interface OpenFolderResult {
@@ -84,7 +91,7 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
   const sessionId = input.sessionId ?? detectSessionId();
   const branch = input.branch ?? slugOf(input.docs[0]!);
   // body 要在 lint 之前拼好 —— 规则里有查 body 的（五段缺项），它吃的是最终文本。
-  const built = buildBody(input.body, sessionId);
+  const built = buildBody(input.body, sessionId, input.track ? buildRelMarker(input.track) : null);
 
   let findings: Finding[] = [];
   const staged = await stageFolder(
@@ -132,6 +139,11 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
 
   const warnings = [...built.warnings];
   if (staged.fetchFailed) warnings.push('fetch origin 失败 —— 分支基点可能落后于最新 main');
+  if (input.track) {
+    warnings.push(...(await applyTrackLabels(ref, pr.number, labelsFor(input.track))));
+  } else {
+    warnings.push('本折没带 track（proj/kind/wait）—— 门下分组会把它落到「未标注」，词表与规矩见 review #61');
+  }
   const check = await verifyMarker(ref, pr.number, sessionId);
   if (!check.ok && check.message) warnings.push(check.message);
 
@@ -144,6 +156,53 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
     findings,
     warnings,
   };
+}
+
+/**
+ * 贴折务追踪的 label（#61）。**折已经建好才走到这里**，所以任何失败都只能是 warning ——
+ * 贴不上 ≠ 折没呈上，把两件事说成一件会引人重开一折（与 verifyMarker 同一个理由）。
+ *
+ * 两步：
+ *   1. 补建缺的 label —— 按词表定色（track.ts 单点）。**尽力而为**：这步失败的代价
+ *      只是颜色落默认灰（下一步会自动建缺的，2026-07-31 对真仓实测），所以吞掉不报。
+ *   2. 一次性贴上 —— 这步才是硬的，失败要报出补救命令。
+ */
+async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[]): Promise<string[]> {
+  try {
+    const existing = await get<Array<{ name: string }>>(
+      'GET /repos/{owner}/{repo}/labels',
+      { owner: ref.owner, repo: ref.repo, per_page: 100 },
+      { pageGuard: { kind: 'unknown', detail: 'label 超过 100 个 —— 词表不该长这么大，先去清理' } },
+    );
+    const have = new Set(existing.map((l) => l.name));
+    for (const name of labels.filter((n) => !have.has(n))) {
+      try {
+        await write('POST /repos/{owner}/{repo}/labels', {
+          owner: ref.owner,
+          repo: ref.repo,
+          name,
+          color: labelColor(name),
+          description: labelDesc(name),
+        });
+      } catch {
+        // 与人并发建同名 label / 网络抖动 —— 都由第 2 步兜底，这里只影响颜色。
+      }
+    }
+  } catch {
+    // 读不到现有 label 清单：直接靠第 2 步的自动建。
+  }
+  try {
+    await write('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
+      owner: ref.owner,
+      repo: ref.repo,
+      issue_number: prNumber,
+      labels,
+    });
+    return [];
+  } catch (e) {
+    const cmd = labels.map((l) => `--add-label ${JSON.stringify(l)}`).join(' ');
+    return [`track 的 label 没贴上（折本身已建好）：${String((e as Error)?.message ?? e)}。补：gh pr edit ${prNumber} -R ${ref.slug} ${cmd}`];
+  }
 }
 
 // ── 回话 ──
@@ -264,6 +323,11 @@ export interface AuditRow {
   findings: Finding[];
   /** 体例检查跑没跑起来。跑不起来 ≠ 合格。 */
   lintRan: boolean;
+  /**
+   * 折务四检（#61 §3.4 + 涂归追加的「可画可候选」）：僵尸候选 / 已解锁 / wait 漂移 / 可画可。
+   * 与 problems 分开 —— 「依赖已解锁」不是毛病，混在一起会把好消息读成坏消息。
+   */
+  trackNotes: string[];
 }
 
 /**
@@ -279,11 +343,65 @@ export interface AuditRow {
  * 体例那部分调 Phase 2 的核（R7：同一折两边判定必须一致）。
  */
 export async function auditFolders(ref: RepoRef = reviewRepo()): Promise<{ repo: string; folders: AuditRow[] }> {
-  const list = await get<Array<{ number: number; title: string; body: string | null; draft: boolean; head: { ref: string } }>>(
+  type RawListed = {
+    number: number;
+    title: string;
+    body: string | null;
+    draft: boolean;
+    head: { ref: string };
+    labels: Array<{ name: string }>;
+    merged_at: string | null;
+  };
+  const list = await get<RawListed[]>(
     'GET /repos/{owner}/{repo}/pulls',
     { owner: ref.owner, repo: ref.repo, state: 'open', per_page: 100 },
     { pageGuard: { kind: 'tooManyFolders', repo: ref.slug } },
   );
+
+  // 折务四检（#61）要的另外两份材料：
+  //   · 近期已画可折的 body —— 谁声明 supersedes 了还开着的折（僵尸候选），
+  //     谁的画可解了 open 折的 needs。closed 里没 merge 的（打回）不算画可，照 folders.ts 同规过滤。
+  //   · open 折的 counts / engaged —— wait 漂移与可画可候选。走 readAll 那条**唯一**的计数路径，
+  //     不另算一遍（「列折说 3 条未回、巡检说 2 条」这种分叉正是 design §2 反对的）。
+  // 两份都拿不到时四检降级跳过 —— 巡检的其余部分照跑，比整个 audit 挂掉有用。
+  let mergedStates: TrackFolderState[] = [];
+  let countsByPr = new Map<number, { counts: { needsReply: number; unclear: number }; engaged: boolean }>();
+  let trackDown: string | null = null;
+  try {
+    const closed = await get<RawListed[]>(
+      'GET /repos/{owner}/{repo}/pulls',
+      { owner: ref.owner, repo: ref.repo, state: 'closed', per_page: 100 },
+      { pageGuard: { kind: 'tooManyFolders', repo: ref.slug } },
+    );
+    mergedStates = closed
+      .filter((p) => p.merged_at != null)
+      // labels 兜空：真 API 恒有这个字段，但测试夹具/降级代理未必给 —— 四检少一维好过整个巡检炸掉。
+      .map((p) => ({ number: p.number, labels: (p.labels ?? []).map((l) => l.name), body: p.body }));
+    const details = await readAll('open', ref);
+    countsByPr = new Map(
+      details
+        .flatMap((d) => (isFolderError(d) ? [] : [d]))
+        .map((d) => [
+          d.number,
+          {
+            counts: d.counts,
+            // engaged 只认**确证**是他的话（fromDesk）—— 共用账号下别的判据都会多报。
+            engaged: d.inline.some((t) => t.fromDesk === true) || d.conversation.some((c) => c.fromDesk === true),
+          },
+        ]),
+    );
+  } catch (e) {
+    trackDown = `折务四检没跑起来（其余巡检照常）：${String((e as Error)?.message ?? e)}`;
+  }
+  const openStates: TrackFolderState[] = list.map((p) => ({
+    number: p.number,
+    labels: (p.labels ?? []).map((l) => l.name),
+    body: p.body,
+    ...(countsByPr.has(p.number)
+      ? { counts: countsByPr.get(p.number)!.counts, engaged: countsByPr.get(p.number)!.engaged }
+      : {}),
+  }));
+  const notes = trackDown === null ? trackAudit(openStates, mergedStates, ref.slug) : new Map<number, string[]>();
 
   const worktree = reviewPath();
   // 批量跑时只在最外层 fetch 一次 —— 每折各 fetch 一次是几十次网络往返。
@@ -315,7 +433,9 @@ export async function auditFolders(ref: RepoRef = reviewRepo()): Promise<{ repo:
     }
     if (hasHard(findings)) problems.push('体例有硬伤（见 findings）');
 
-    rows.push({ pr: p.number, title: p.title, branch: p.head.ref, problems, findings, lintRan });
+    const trackNotes = [...(notes.get(p.number) ?? [])];
+    if (trackDown !== null) trackNotes.push(trackDown);
+    rows.push({ pr: p.number, title: p.title, branch: p.head.ref, problems, findings, lintRan, trackNotes });
   }
 
   return { repo: ref.slug, folders: rows };
