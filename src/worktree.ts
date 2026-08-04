@@ -359,7 +359,11 @@ export async function stageFolder(
     // 都是并行 session 留下的；目录还在的不动，只清目录已经没了的。
     tryGit(repo, ['worktree', 'prune']);
 
-    const fetchFailed = tryGit(repo, ['fetch', '-q', 'origin']) === null;
+    // `--prune` 不能省：普通 fetch 只**加**追踪引用，从不删已在远端消失的那些。
+    // 关折时带 --delete-branch 删掉远端分支后，本地 refs/remotes/origin/<branch>
+    // 会一直留着，于是同名重呈被永久判成「远端已经存在」——而 ls-remote 和 API
+    // 都说没有（2026-08-03 #74 实战踩到）。prune 只动本地追踪引用，不写远端，不违反 R8。
+    const fetchFailed = tryGit(repo, ['fetch', '-q', '--prune', 'origin']) === null;
 
     // **本地有 / 远端有，是两件完全不同的事，提示不能一样。**（第二轮评审 2026-07-30）
     // 成功路径只在 push 之后才保留本地分支，而 push 会同时建出远端分支。

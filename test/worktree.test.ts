@@ -421,6 +421,37 @@ describe('崩溃残留要说人话（第二轮评审）', () => {
       rmSync(scratch, { recursive: true, force: true });
     }
   }, 30_000);
+
+  // 2026-08-03 实战踩到：#74 关折时带 --delete-branch 把远端分支删了，
+  // 同名重呈却被判「远端已经存在」。远端 ls-remote 干净、API 404，
+  // 挡路的是本地 clone 里过期的 refs/remotes/origin/<branch>——
+  // 因为 `git fetch` **不删**已消失的追踪引用，只有 `--prune` 会。
+  // 判据必须反映远端真实状态，否则一次正常的关折+重呈会被永久锁死。
+  it('远端分支已删、本地只剩过期的 origin/ 追踪引用 —— 该放行，不是重复呈折', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'revived.md'), 'x\n');
+    // 呈过一次：建分支、推上去、把追踪引用拉下来
+    git(repo, ['branch', 'revived']);
+    git(repo, ['push', '-q', 'origin', 'revived']);
+    git(repo, ['fetch', '-q', 'origin']);
+    git(repo, ['branch', '-D', 'revived']);
+    // 折关掉、分支在 GitHub 那侧被删 —— 本地 clone 完全不知情
+    git(origin, ['branch', '-D', 'revived']);
+    expect(git(repo, ['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/revived'])).toBeTruthy();
+
+    try {
+      const r = await stageFolder(
+        { docs: [join(src, 'revived.md')], branch: 'revived', message: 'm' },
+        async () => {},
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      ).catch((x: unknown) => x);
+      if (r instanceof Error) throw new Error(`不该失败，却报：${r.message}`);
+      expect((r as { headSha: string }).headSha).toBeTruthy();
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('两条只能靠接缝证的防御（变异战役里原样存活过）', () => {
