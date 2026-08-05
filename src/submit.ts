@@ -44,6 +44,8 @@ export interface OpenFolderInput {
   body: FolderBody;
   docs: string[];
   assets?: string[];
+  /** 事实档（史馆）。本机绝对路径，必须含 `/knowledge/<proj>/`——项目名从路径读，不猜。 */
+  facts?: string[];
   /** 覆盖用。不给则自行探测，探不到就不埋（绝不编）。 */
   sessionId?: string;
   /** 覆盖用。默认取第一篇文档的 slug。 */
@@ -98,6 +100,7 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
     {
       docs: input.docs,
       ...(input.assets ? { assets: input.assets } : {}),
+      ...(input.facts ? { facts: input.facts } : {}),
       ...(input.monolingual ? { monolingual: true } : {}),
       branch,
       message: input.title,

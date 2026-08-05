@@ -256,6 +256,8 @@ export interface StageRequest {
   docs: string[];
   /** 本机绝对路径，正文引用的图。 */
   assets?: string[];
+  /** 本机绝对路径，落 `knowledge/<proj>/` 的事实档。路径里必须含 `/knowledge/`。 */
+  facts?: string[];
   /** 分支名。 */
   branch: string;
   message: string;
@@ -295,7 +297,7 @@ export interface StageOpts extends LockOpts {
 /** 落一个文件到 worktree 里的相对路径。**已存在就报错，不静默覆盖。** */
 function place(src: string, wt: string, rel: string, copied: string[]): void {
   if (!existsSync(src)) {
-    return fail({ kind: 'worktree', what: `读不到文件：${src}`, hint: 'docs / assets 要给本机绝对路径。' });
+    return fail({ kind: 'worktree', what: `读不到文件：${src}`, hint: 'docs / assets / facts 都要给本机绝对路径。' });
   }
   const dst = join(wt, rel);
   if (existsSync(dst)) {
@@ -331,6 +333,36 @@ export function assetTarget(src: string): string {
   const i = src.lastIndexOf('/assets/');
   const tail = i >= 0 ? src.slice(i + '/assets/'.length) : basename(src);
   return `docs/assets/${tail}`;
+}
+
+/**
+ * 事实档（史馆 / knowledge layer）落到仓里哪个路径。
+ *
+ * 与 `assetTarget` 同构 —— 保留 `/knowledge/` 之后的整段 —— 但**刻意没有 basename 兜底**。
+ *
+ * 为什么不兜底：图拍平了顶多断一张图，事实档拍平了是把两个项目的 `FACTS.md`
+ * 撞成同一个文件。而 `id`（`glacier-003`）是**全局引用锚** —— 敕草正文、回话、
+ * 别的 FACTS 都可能引它，撞了之后再也分不开是谁的。所以项目名从路径里**读**，
+ * 读不到就报错，绝不猜。这与 `assetTarget` 的取舍不同是有意的。
+ */
+export function factsTarget(src: string): string {
+  const i = src.lastIndexOf('/knowledge/');
+  if (i < 0) {
+    return fail({
+      kind: 'worktree',
+      what: `facts 路径里没有 /knowledge/：${src}`,
+      hint: '事实档要给 .../knowledge/<proj>/FACTS.md 这样的路径 —— 项目名是从路径里读出来的，不猜。',
+    });
+  }
+  const tail = src.slice(i + '/knowledge/'.length);
+  if (!tail.includes('/')) {
+    return fail({
+      kind: 'worktree',
+      what: `facts 路径缺项目名：${src}`,
+      hint: '要 knowledge/<proj>/FACTS.md，不能直接是 knowledge/FACTS.md —— 事实必须挂在某个项目下。',
+    });
+  }
+  return `knowledge/${tail}`;
 }
 
 /**
@@ -413,6 +445,12 @@ export async function stageFolder(
         seen.add(rel);
         place(src, wt, rel, copied);
       }
+      for (const src of req.facts ?? []) {
+        const rel = factsTarget(src);
+        if (seen.has(rel)) return fail({ kind: 'worktree', what: `两份事实档撞路径：${rel}` });
+        seen.add(rel);
+        place(src, wt, rel, copied);
+      }
       if (copied.length === 0) return fail({ kind: 'worktree', what: '一个文档都没有', hint: 'docs 至少要给一对（中英各一份）。' });
 
       // 单语读物登记。**追加不是覆盖** —— 从 main 继承来的条目（前几折登记过的）
@@ -428,7 +466,14 @@ export async function stageFolder(
         copied.push('docs/.monolingual');
       }
 
-      if (tryGit(wt, ['add', '--', 'docs']) === null) return fail({ kind: 'worktree', what: 'git add 失败' });
+      // pathspec 必须跟着 `copied` 走。**写死 `docs` 会让 facts 静默丢失** ——
+      // 文件拷进 worktree 了、`copied` 里也有，但没 stage 就不进 commit，
+      // 调用方收到的是一个「成功」的 PR，里面没有事实档。
+      // 而 `git add -- knowledge` 在没有 facts 的折上会因 pathspec 不匹配报错，
+      // 所以按实际拷了什么来拼，不能两个都写死。
+      const addPaths = ['docs'];
+      if (copied.some((p) => p.startsWith('knowledge/'))) addPaths.push('knowledge');
+      if (tryGit(wt, ['add', '--', ...addPaths]) === null) return fail({ kind: 'worktree', what: 'git add 失败' });
       if (tryGit(wt, ['commit', '-m', req.message]) === null) {
         return fail({ kind: 'worktree', what: 'git commit 失败', hint: '多半是没有可提交的改动，或者 git 身份没配。' });
       }

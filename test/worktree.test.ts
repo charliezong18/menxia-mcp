@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import { acquireLock, stageFolder, STALE_MS } from '../src/worktree.js';
+import { acquireLock, stageFolder, factsTarget, STALE_MS } from '../src/worktree.js';
 import { isFailure } from '../src/errors.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -589,6 +589,136 @@ describe('单语读物登记（docs/.monolingual）', () => {
       const { lint } = await import('../src/lint.js');
       const findings = lint(collect({ worktree: repo, ref: 'origin/mono-4', base: 'origin/main', skipFetch: false }));
       expect(findings.filter((f) => f.rule === 1)).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe('事实档（史馆 / knowledge layer）', () => {
+  const noLint = async (): Promise<void> => {};
+
+  describe('factsTarget：项目名从路径读，不猜', () => {
+    it('保留 /knowledge/ 之后的整段', () => {
+      expect(factsTarget('/Users/c/op/outputs/menxia-knowledge-layer/knowledge/glacier-np-2026/FACTS.md'))
+        .toBe('knowledge/glacier-np-2026/FACTS.md');
+      expect(factsTarget('/tmp/knowledge/glacier-np-2026/refs/nps-shuttle.md'))
+        .toBe('knowledge/glacier-np-2026/refs/nps-shuttle.md');
+    });
+
+    it('取最后一个 /knowledge/ —— 路径里套了两层也不会截错', () => {
+      expect(factsTarget('/home/knowledge/tmp/knowledge/proj-a/FACTS.md'))
+        .toBe('knowledge/proj-a/FACTS.md');
+    });
+
+    // 这条是与 assetTarget 的**刻意分歧**：图拍平顶多断一张图，
+    // 事实档拍平是把两个项目的 FACTS.md 撞成一个，而 id 是全局引用锚。
+    it('路径里没有 /knowledge/ —— 报错，不用 basename 兜底', () => {
+      try {
+        factsTarget('/tmp/somewhere/FACTS.md');
+        expect.unreachable('应该抛错');
+      } catch (e) {
+        expect(isFailure(e)).toBe(true);
+        expect(String(e)).toContain('/knowledge/');
+      }
+    });
+
+    it('knowledge/FACTS.md 缺项目名 —— 也报错', () => {
+      try {
+        factsTarget('/tmp/knowledge/FACTS.md');
+        expect.unreachable('应该抛错');
+      } catch (e) {
+        expect(isFailure(e)).toBe(true);
+        expect(String(e)).toContain('项目名');
+      }
+    });
+  });
+
+  // 这条测的是 `git add` 的 pathspec。写死 `docs` 时文件会被拷进 worktree、
+  // 也会出现在 `copied` 里，但**永远进不了 commit** —— 调用方收到一个「成功」的折，
+  // 里面没有事实档。只有从 origin 读才证得了，从本地 worktree 读会假通过。
+  it('facts 真的进了远端的 commit（不是只拷进 worktree）', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'doc.md'), '# English\n');
+    writeFileSync(join(src, 'doc.zh-CN.md'), '# 中文\n');
+    mkdirSync(join(src, 'knowledge', 'glacier-np-2026', 'refs'), { recursive: true });
+    writeFileSync(join(src, 'knowledge', 'glacier-np-2026', 'FACTS.md'), '| id | claim |\n|---|---|\n| `glacier-001` | 摆渡票 $1/人/天 |\n');
+    writeFileSync(join(src, 'knowledge', 'glacier-np-2026', 'refs', 'nps-shuttle.md'), '抓取 2026-08-01\n');
+    try {
+      const out = await stageFolder(
+        {
+          docs: [join(src, 'doc.md'), join(src, 'doc.zh-CN.md')],
+          facts: [
+            join(src, 'knowledge', 'glacier-np-2026', 'FACTS.md'),
+            join(src, 'knowledge', 'glacier-np-2026', 'refs', 'nps-shuttle.md'),
+          ],
+          branch: 'facts-folder',
+          message: '带事实档的折',
+        },
+        noLint,
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      expect(out.copied.sort()).toEqual([
+        'docs/doc.md',
+        'docs/doc.zh-CN.md',
+        'knowledge/glacier-np-2026/FACTS.md',
+        'knowledge/glacier-np-2026/refs/nps-shuttle.md',
+      ]);
+
+      // 从 origin 读 —— 证明真 commit 且真 push 了，子目录结构也保住了
+      expect(git(origin, ['show', 'facts-folder:knowledge/glacier-np-2026/FACTS.md']))
+        .toContain('glacier-001');
+      expect(git(origin, ['show', 'facts-folder:knowledge/glacier-np-2026/refs/nps-shuttle.md']))
+        .toContain('2026-08-01');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // 对称的一半：pathspec 是按 copied 拼的，不给 facts 时不能把 `knowledge`
+  // 塞进 `git add`（那个 pathspec 不匹配任何文件，git 会直接报错，
+  // 于是每一个不带事实档的普通折都推不上去）。
+  it('不给 facts 的普通折照常推得上去，且 knowledge/ 一个字都不写', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'plain.md'), '# English\n');
+    writeFileSync(join(src, 'plain.zh-CN.md'), '# 中文\n');
+    try {
+      const out = await stageFolder(
+        { docs: [join(src, 'plain.md'), join(src, 'plain.zh-CN.md')], branch: 'plain-folder', message: '普通折' },
+        noLint,
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      expect(out.copied.sort()).toEqual(['docs/plain.md', 'docs/plain.zh-CN.md']);
+      expect(git(origin, ['ls-tree', '-r', '--name-only', 'plain-folder'])).not.toContain('knowledge/');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('两份事实档撞同一个仓内路径 —— 先拦下来，不静默覆盖', async () => {
+    const { repo, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    writeFileSync(join(src, 'doc.md'), '# English\n');
+    writeFileSync(join(src, 'doc.zh-CN.md'), '# 中文\n');
+    mkdirSync(join(src, 'a', 'knowledge', 'proj-x'), { recursive: true });
+    mkdirSync(join(src, 'b', 'knowledge', 'proj-x'), { recursive: true });
+    writeFileSync(join(src, 'a', 'knowledge', 'proj-x', 'FACTS.md'), 'A\n');
+    writeFileSync(join(src, 'b', 'knowledge', 'proj-x', 'FACTS.md'), 'B\n');
+    try {
+      await expect(
+        stageFolder(
+          {
+            docs: [join(src, 'doc.md'), join(src, 'doc.zh-CN.md')],
+            facts: [join(src, 'a', 'knowledge', 'proj-x', 'FACTS.md'), join(src, 'b', 'knowledge', 'proj-x', 'FACTS.md')],
+            branch: 'dup-facts',
+            message: '撞路径',
+          },
+          noLint,
+          { reviewPath: repo, lockPath: join(src, 'l.lock') },
+        ),
+      ).rejects.toThrow(/撞路径/);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

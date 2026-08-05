@@ -149,6 +149,14 @@ export const TOOLS = [
         },
         docs: { type: 'array', items: { type: 'string' }, description: '本机绝对路径，双语一对都要给' },
         assets: { type: 'array', items: { type: 'string' }, description: '本机绝对路径，正文引用的图' },
+        facts: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            '事实档（史馆 / knowledge layer），本机绝对路径，**路径里必须含 `/knowledge/<proj>/`**——' +
+            '项目名从路径读，不猜。落进仓里的 knowledge/<proj>/。体例见 knowledge/README.zh-CN.md：' +
+            '一行一 claim，七字段（id/claim/来源/取证/等级/复核/易变）。敕草正文引 fact id，别复制数值',
+        },
         branch: { type: 'string', description: '覆盖用，默认取第一篇文档的 slug' },
         sessionId: { type: 'string', description: '覆盖用；不给则自行探测，探不到就不埋（绝不编）' },
         monolingual: {
@@ -473,13 +481,13 @@ export async function handleTool(
   }
   // ── 写入侧（Phase 3）──
   if (name === 'open_folder') {
-    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'branch', 'sessionId', 'monolingual', 'track']);
+    rejectUnknownKeys('open_folder', args, ['title', 'body', 'docs', 'assets', 'facts', 'branch', 'sessionId', 'monolingual', 'track']);
     for (const k of ['title', 'branch', 'sessionId'] as const) {
       if (args[k] !== undefined && typeof args[k] !== 'string') {
         throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串，收到 ${JSON.stringify(args[k])}` });
       }
     }
-    for (const k of ['docs', 'assets'] as const) {
+    for (const k of ['docs', 'assets', 'facts'] as const) {
       if (args[k] === undefined) continue;
       if (!Array.isArray(args[k]) || (args[k] as unknown[]).some((x) => typeof x !== 'string')) {
         throw new ZhupiFailure({ kind: 'badInput', what: `${k} 得是字符串数组（本机绝对路径），收到 ${JSON.stringify(args[k])}` });
@@ -512,6 +520,7 @@ export async function handleTool(
         body: args.body as FolderBody,
         docs: args.docs as string[],
         ...(args.assets !== undefined ? { assets: args.assets as string[] } : {}),
+        ...(args.facts !== undefined ? { facts: args.facts as string[] } : {}),
         ...(args.branch !== undefined ? { branch: args.branch as string } : {}),
         ...(args.sessionId !== undefined ? { sessionId: args.sessionId as string } : {}),
         ...(args.monolingual === true ? { monolingual: true } : {}),
