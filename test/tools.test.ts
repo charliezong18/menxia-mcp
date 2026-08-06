@@ -142,7 +142,7 @@ describe('mark_handled 的行为（离线，注入取数口）', () => {
     expect(load(process.env.ZHUPI_STATE_FILE!).store).toEqual({});
   });
 
-  it('seed 预览里带正文，且**他的朱批要有警告**（标掉等于让他的话消失）', async () => {
+  it('seed 预览里带正文，且**他的涂归要有警告**（标掉等于让他的话消失）', async () => {
     const r = await T({ pr: 9, seed: true });
     expect(r.targets.map((t: any) => t.preview)).toContain('文档是不是有点旧了。');
     expect(r.hint).toMatch(/他的涂归/);
@@ -176,7 +176,7 @@ describe('mark_handled 的行为（离线，注入取数口）', () => {
     expect(Object.keys(stored()).sort()).toEqual(['100', '200']);
   });
 
-  it('dry-run 之后又来了新总批 → 旧的 confirm 数字失效，不会顺手把新话标掉', async () => {
+  it('dry-run 之后又来了新判 → 旧的 confirm 数字失效，不会顺手把新话标掉', async () => {
     const dry = await T({ pr: 9, seed: true });   // wouldMark = 2
     const withNew = { entries: async () => [HIS, MINE, { ...HIS, id: 300, preview: '你把第 3 点搞错了' }] as never };
     await expect(handleTool('mark_handled', { pr: 9, seed: true, confirm: dry.wouldMark }, withNew))

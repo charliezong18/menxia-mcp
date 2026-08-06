@@ -45,7 +45,7 @@ const main = async () => {
     stderr: 'pipe',
     env: { ...process.env, ZHUPI_STATE_FILE: stateFile },
   });
-  const client = new Client({ name: 'zhupi-mcp-acceptance', version: '0.1.0' }, { capabilities: {} });
+  const client = new Client({ name: 'menxia-mcp-acceptance', version: '0.1.0' }, { capabilities: {} });
   await client.connect(transport);
 
   console.log('\n── R1 · 服务能挂上 ──');
@@ -80,7 +80,7 @@ const main = async () => {
     f17?.inline?.every((t) => t.quote.length > 0 && !/^[+-]/.test(t.quote)),
     `实得 ${JSON.stringify(f17?.inline?.map((t) => t.quote.slice(0, 20)))}`);
 
-  console.log('\n── R4 · 总批的 answered 取自本地记录，不是推断（review#29）──');
+  console.log('\n── R4 · 判的 answered 取自本地记录，不是推断（review#29）──');
   const r18 = await call(client, 'read_comments', { pr: 18 });
   const f18 = r18.folders?.[0];
   check('conversation 恰好 2 条', f18?.conversation?.length === 2, `实得 ${f18?.conversation?.length}`);
@@ -149,10 +149,10 @@ const main = async () => {
 
   const merged = await call(client, 'list_folders', { state: 'merged' });
   check('merged 列表非空', merged.folders?.length > 0, `实得 ${merged.folders?.length}`);
-  check('merged 不含 #10（那是打回关闭，不是钦此）',
+  check('merged 不含 #10（那是打回关闭，不是画可）',
     !merged.folders?.some((f) => f.number === 10),
     '#10 出现在 merged 里 —— 说明用了 state=closed 没按 merged_at 过滤');
-  check('merged 含 #19/#20（真钦此过的）',
+  check('merged 含 #19/#20（真画可过的）',
     [19, 20].every((n) => merged.folders?.some((f) => f.number === n)));
 
   console.log('\n── design §2 · 两个工具的 counts 必须逐字段一致 ──');
@@ -171,11 +171,11 @@ const main = async () => {
   const allOpen = JSON.stringify(await call(client, 'read_comments', {})).length;
   const triage = JSON.stringify(await call(client, 'list_folders', {})).length;
   console.log(`  单折 #22 ${oneFolder} B · 全部 open ${allOpen} B · 只分诊 ${triage} B`);
-  check('单折体积没膨胀（截断总批正文之后）', oneFolder < 9000, `${oneFolder} B`);
+  check('单折体积没膨胀（截断判正文之后）', oneFolder < 9000, `${oneFolder} B`);
   check('只分诊比读全部小一个量级 —— 「哪些折在等我」应该很便宜', triage * 3 < allOpen, `${triage} vs ${allOpen}`);
   const long = (await call(client, 'read_comments', {})).folders
     .flatMap((f) => f.conversation ?? []).filter((c) => c.bodyTruncated);
-  check('超长总批被截断并标 bodyTruncated + bodyLength',
+  check('超长判被截断并标 bodyTruncated + bodyLength',
     long.every((c) => c.body.length < 700 && typeof c.bodyLength === 'number'),
     JSON.stringify(long.map((c) => [c.id, c.body.length, c.bodyLength])));
 
@@ -185,7 +185,7 @@ const main = async () => {
   check('#22 那 4 条早回完的串不该再挂在 unclear（约定生效前发的回话没前缀）',
     r22.counts.unclear === 0, `unclear=${r22.counts.unclear}：${JSON.stringify(r22.attention?.map((a) => a.preview.slice(0, 24)))}`);
 
-  console.log('\n── Phase 2 · lint_folder 在真奏折仓上（R7：巡检与闸门共用一个核）──');
+  console.log('\n── Phase 2 · lint_folder 在真敕草仓上（R7：巡检与闸门共用一个核）──');
   const reviewWt = `${process.env.HOME}/Developer/review`;
   const lintMain = await call(client, 'lint_folder', { worktree: reviewWt, ref: 'origin/main', base: 'origin/main' });
   check('main 自己对自己 → 没有 docs 改动，如实报硬伤而不是说「合格」',

@@ -31,20 +31,20 @@ const SECTIONS: Array<[keyof FolderBody, string]> = [
   ['howto', '怎么用'],
 ];
 
-// **两条都照 zhupi 的源码抄，不是照我的想象。**（第三轮跨系统评审 2026-07-30）
+// **两条都照 menxia 的源码抄，不是照我的想象。**（第三轮跨系统评审 2026-07-30）
 //
-// zhupi `src/link.js:83-88` 是先松后严两步：
+// menxia `src/link.js:83-88` 是先松后严两步：
 //   const marked = /<!--\s*happy-session:\s*([^\s>]+)\s*-->/i.exec(text);
 //   return SESSION_ID.test(raw) ? `${HAPPY_BASE}/session/${raw}` : null;
 //   const SESSION_ID = /^[a-z0-9]{16,40}$/i;   // 锚定：`http://evil/...` 之类不得当成裸 id
 //
 // 上一版这里是 `/<!--\s*happy-session:\s*([A-Za-z0-9_-]+)\s*-->/` —— 两个方向都不对：
-// 提取比 zhupi 严（吃不到它故意放行的整条 URL 那条通道），**校验比 zhupi 松**
+// 提取比 menxia 严（吃不到它故意放行的整条 URL 那条通道），**校验比 menxia 松**
 // （允许 `_`、`-` 和任意长度）。后者才是真问题：`sessionId` 是可覆盖入参，
 // 传一个带连字符的 UUID 进来，`verifyMarker` 会报 ok、`open_folder` 一个警告都不出，
 // 而门下上那个「回奏对」按钮**静默不出现** —— 正是这个文件开头声称在防的那件事。
 export const MARKER_RE = /<!--\s*happy-session:\s*([^\s>]+)\s*-->/i;
-/** zhupi 认不认这个 id。逐字抄自 `link.js:80`。 */
+/** menxia 认不认这个 id。逐字抄自 `link.js:80`。 */
 export const SESSION_ID_RE = /^[a-z0-9]{16,40}$/i;
 
 export interface BuiltBody {
@@ -81,10 +81,10 @@ export function buildBody(b: FolderBody, sessionId: string | null, relMarker?: s
   // 排在 happy-session 之前 —— 两个正则都全文扫，顺序只为肉眼读 diff 时稳定。
   if (relMarker) text += `\n\n${relMarker}`;
   if (sessionId && !SESSION_ID_RE.test(sessionId)) {
-    // **埋一个 zhupi 认不出来的 id ≠ 不埋。** 埋了它，按钮照样不出现，
+    // **埋一个 menxia 认不出来的 id ≠ 不埋。** 埋了它，按钮照样不出现，
     // 但这边什么都不报 —— 静默指错。宁可不埋并且说出来。
     warnings.push(
-      `会话 id ${JSON.stringify(sessionId)} 不符合门下的格式（16–40 位字母数字，见 zhupi link.js:80），` +
+      `会话 id ${JSON.stringify(sessionId)} 不符合门下的格式（16–40 位字母数字，见 menxia link.js:80），` +
       '本折不埋「回奏对」标记 —— 埋了按钮也不会出现，而且没人会发现',
     );
   } else if (sessionId) {

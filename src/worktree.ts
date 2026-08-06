@@ -319,7 +319,7 @@ const dirOf = (p: string): string => p.slice(0, p.lastIndexOf('/'));
  * （第三轮跨系统评审 2026-07-30）：main 上真实存在的是
  * `docs/assets/shots/annotate.png` / `dark.png` / `setup.png`，
  * 而 `docs/zhupi-readme.md` 正文引用的是 `assets/shots/setup.png`。
- * zhupi 按**文档自身所在目录**解析相对路径（`render.js:27`
+ * menxia 按**文档自身所在目录**解析相对路径（`render.js:27`
  * `const baseDir = docPath.includes('/') ? docPath.slice(0, docPath.lastIndexOf('/') + 1) : ''`），
  * 所以那条引用解析出来就是 `docs/assets/shots/setup.png` —— 拍平之后它变成断图，
  * 而规则 4 会把账算在文档头上，让人去改正文。改完，同一篇在两折里说的话就不一样了。

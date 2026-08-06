@@ -5,7 +5,7 @@
 // 「换个写法顺手绕过」正是它要防的病。所以这里一律走 git 子进程。
 //
 // 顺带一个好处（设计 §0）：读**分支树**比读脏工作树更对 ——
-// zhupi 渲染的是 GitHub 上的内容，也就是提交过的内容。
+// menxia 渲染的是 GitHub 上的内容，也就是提交过的内容。
 //
 // 关于 `git fetch`：它是远端**读**，与 R8「不写远端」不冲突。
 // 老脚本 `folder-lint.sh:21` 就做这件事，这里照搬，但**失败要报**（需求 R5，规则 9）。
@@ -140,7 +140,7 @@ export function collect(opts: SnapshotOpts = {}): Snapshot {
 
   // 仓里真实存在的文件（相对 docs/）。
   // **扫整个 docs/ 而不是只扫 docs/assets/** —— 图片引用现在按文档自身目录解析
-  // （与 zhupi `render.js:26` 一致），子目录文档会解析出 `sub/assets/p.png` 这种路径，
+  // （与 menxia `render.js:26` 一致），子目录文档会解析出 `sub/assets/p.png` 这种路径，
   // 只扫 docs/assets/ 的话查不到（第三轮评审）。
   const tree = tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'docs/']) ?? '';
   const assets = new Set(

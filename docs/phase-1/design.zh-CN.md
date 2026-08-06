@@ -2,27 +2,27 @@
 
 # Phase 1 设计 —— 只读工具
 
-> 三段走的第二段。上一段 [requirements](requirements.zh-CN.md) 已于 2026-07-29 钦此（#19）。
+> 三段走的第二段。上一段 [requirements](requirements.zh-CN.md) 已于 2026-07-29 画可（#19）。
 > 本文 v2：2026-07-29 经两轮独立对抗性评审重写，§3 与 §4 的结论**与 v1 相反**，见 §0.2。
 
 ## 0. 写在最前
 
 ### 0.1 requirements 撞到的墙
 
-R4 说「**没有我方 reply 的批注 = 未回**」。但 **agent 和 Charlie 用同一个 GitHub 账号**（`gh auth token` 拿到的就是 `charliezong18`），API 里作者字段完全一样（#18 两条总批实测，都是他）。**「我方」在数据里不存在。**
+R4 说「**没有我方 reply 的批注 = 未回**」。但 **agent 和 Charlie 用同一个 GitHub 账号**（`gh auth token` 拿到的就是 `charliezong18`），API 里作者字段完全一样（#18 两条判实测，都是他）。**「我方」在数据里不存在。**
 
 ### 0.2 v1 错在哪（双 review 的结论）
 
-v1 认定「谁发的」这条线索彻底作废，于是 inline 靠「有没有 reply」、总批靠「后面有没有别的总批」。两个独立评审各自查出三条高危，根因同一个：**v1 的数据模型里没有「我方回话」这个概念，而 R3/R4 有。**
+v1 认定「谁发的」这条线索彻底作废，于是 inline 靠「有没有 reply」、判靠「后面有没有别的判」。两个独立评审各自查出三条高危，根因同一个：**v1 的数据模型里没有「我方回话」这个概念，而 R3/R4 有。**
 
-实测推翻了 v1 的前提：**inline 侧存在可靠判别信号**（§3.0）。总批侧确实没有，但 v1 的近似方式会**常态谎报**（§3.2）。
+实测推翻了 v1 的前提：**inline 侧存在可靠判别信号**（§3.0）。判侧确实没有，但 v1 的近似方式会**常态谎报**（§3.2）。
 
 三条被真数据打掉的具体结论：
 
 | v1 的说法 | 真数据 |
 |---|---|
 | 「对 #18 跑一次，未回数应为 0」 | 按 v1 规则算必然是 1，这条验收判据不可满足 |
-| 总批「后面还有 → 已回」够用 | **最后一条总批几乎永远是我方回话**，会被判成他的未回批注。有总批的 3 折里 2 折会常态挂一条我自己写的字当待办 |
+| 判「后面还有 → 已回」够用 | **最后一条判几乎永远是我方回话**，会被判成他的未回批注。有判的 3 折里 2 折会常态挂一条我自己写的字当待办 |
 | inline 的 `line` 直接用 | **实测 100% 为 null**，真值在 `original_line` |
 
 ---
@@ -67,9 +67,9 @@ readFolder(pr) ──▶ { inline[], conversation[], counts }
 
 ### 3.0 判别信号 —— review body
 
-zhupi 提交批注走 `POST /pulls/{n}/reviews`（`zhupi/src/github.js:144 submitReview`），带固定 review body **`御笔朱批 · N 条`**。agent 回话走 `POST /pulls/{n}/comments/{id}/replies`，GitHub 为它自动建一个 **body 为空**的 review。
+门下 提交批注走 `POST /pulls/{n}/reviews`（`menxia/src/github.js:144 submitReview`），带固定 review body **`御笔朱批 · N 条`**。agent 回话走 `POST /pulls/{n}/comments/{id}/replies`，GitHub 为它自动建一个 **body 为空**的 review。
 
-**而 zhupi 没有任何发 reply 的代码路径** —— `github.js` 里只有 `submitReview` / `createIssueComment` / `mergePR` / `markReady`。
+**而 门下 没有任何发 reply 的代码路径** —— `github.js` 里只有 `submitReview` / `createIssueComment` / `mergePR` / `markReady`。
 
 实测 #17：
 
@@ -81,7 +81,7 @@ zhupi 提交批注走 `POST /pulls/{n}/reviews`（`zhupi/src/github.js:144 submi
 
 **规则**：每条 inline comment 用 `pull_request_review_id` 回查所属 review 的 body —— 以 `御笔朱批` 开头 → **他的**；否则（含空 body）→ **我方**。**追溯有效，历史数据全适用。**
 
-**已知边界**：他若绕开朱批、直接在 GitHub 网页上回话，会被判成我方。可接受 —— 朱批存在的理由就是不用 GitHub 网页；真发生了症状是「少一条待办」。
+**已知边界**：他若绕开涂归、直接在 GitHub 网页上回话，会被判成我方。可接受 —— 涂归存在的理由就是不用 GitHub 网页；真发生了症状是「少一条待办」。
 
 ### 3.1 inline：确定判定
 
@@ -93,27 +93,27 @@ zhupi 提交批注走 `POST /pulls/{n}/reviews`（`zhupi/src/github.js:144 submi
 
 v1 靠「有没有 reply、不看作者」，会被「他在串里反驳」打穿 —— GitHub 把整串 reply 都指向根，他的反驳会让整串显示成已回，而那恰恰是最要紧的一条（双 review 指出）。v2 靠作者判，不受串长影响。
 
-### 3.2 总批：只能靠顺序，但**不再谎报**
+### 3.2 判：只能靠顺序，但**不再谎报**
 
 `createIssueComment` 裸发 body，会话区**没有判别信号**。
 
-v1 的规则有致命缺陷：**最后一条总批几乎永远是我方回话**，却被判成「他的未回批注」。实测有总批的 3 折里 2 折会常态挂一条我自己写的字当待办 —— 而 `list_folders` 的全部意义就是「哪些折在等我」。
+v1 的规则有致命缺陷：**最后一条判几乎永远是我方回话**，却被判成「他的未回批注」。实测有判的 3 折里 2 折会常态挂一条我自己写的字当待办 —— 而 `list_folders` 的全部意义就是「哪些折在等我」。
 
 v2 三态，且**语义重定义**：
 
 | 值 | 何时 | 计入 `needsReply` |
 |---|---|---|
-| `"inferred"` | 后面还有别的总批 | 否 |
+| `"inferred"` | 后面还有别的判 | 否 |
 | `"unknown"` | 它是最后一条 —— 无法判定是他的新意见还是我的回话 | **否** |
 | `false` | 这一阶段永不出现（需要标记才能确定） | — |
 
 **关键决定：`needsReply` 只计确定的，`unknown` 单列一栏。** 宁可少报也不谎报 —— 少报你还会去看 `unknown` 那栏；谎报会让你以为有事要办，或者更糟，让我以为没事。
 
-为让 `unknown` 一眼可判，`read_comments` 返回带上每条总批的正文与时间。
+为让 `unknown` 一眼可判，`read_comments` 返回带上每条判的正文与时间。
 
 ### 3.3 根治留给 Phase 3
 
-`reply_comment` 发总批时埋 `<!-- zhupi-mcp:reply -->`，此后总批也能确定判定。**存量历史总批永远只能是 `unknown`** —— 不可追溯修复，写在这里免得将来当 bug 查。
+`reply_comment` 发判时埋 `<!-- menxia-mcp:reply -->`，此后判也能确定判定。**存量历史判永远只能是 `unknown`** —— 不可追溯修复，写在这里免得将来当 bug 查。
 
 ---
 
@@ -131,7 +131,7 @@ v2 三态，且**语义重定义**：
 }
 ```
 
-`state=merged` 实现为取 `state=closed` 再按 `merged_at != null` 过滤 —— **REST 没有 `merged` 这个枚举**，直接用 `closed` 会把打回关闭的折（实测 #10）当成已钦此（双 review 指出）。
+`state=merged` 实现为取 `state=closed` 再按 `merged_at != null` 过滤 —— **REST 没有 `merged` 这个枚举**，直接用 `closed` 会把打回关闭的折（实测 #10）当成已画可（双 review 指出）。
 
 ### `read_comments`
 
@@ -217,7 +217,7 @@ R7 是「不发生什么」的要求，**不发生的事只能靠一条主动去
 
 | 对象 | 怎么测 |
 |---|---|
-| `threads.ts` | fixture 取自 `test/fixtures/*.json`（#17 comments / #17 reviews / #18 issue comments 的真实 dump）。用例：他的批注有我方 reply → answered；没有 → 未回；我方发的根不计入；总批交替 → `inferred`；末条 → `unknown`；空输入 |
+| `threads.ts` | fixture 取自 `test/fixtures/*.json`（#17 comments / #17 reviews / #18 issue comments 的真实 dump）。用例：他的批注有我方 reply → answered；没有 → 未回；我方发的根不计入；判交替 → `inferred`；末条 → `unknown`；空输入 |
 | `errors.ts` | 五种映射各一条；**塞假 token 进错误对象，断言输出里搜不到它** |
 | 只读守卫 | §7 第 3 条 |
 | 实机 | 见 tasks T7，判据用真数字正向断言 |
@@ -225,7 +225,7 @@ R7 是「不发生什么」的要求，**不发生的事只能靠一条主动去
 **实机的 ground truth（写死，不许「返回空也算过」）**：
 - `read_comments(17)` → inline 恰好 **2 条根批注**（他的），各挂 **1 条** reply，`answered` 全 true，`counts.needsReply = 0`
 - `read_comments(18)` → conversation **2 条**，没标记过时**两条都 `pending`**、`counts.needsReply = 2`（**§10.7 改**：旧判据写的是「第一条 `inferred`、第二条 `unknown`、`needsReply = 0`」——那正是被修掉的漏报）
-- `list_folders()` 里 **#10 不出现在 `merged` 结果中**（它是打回关闭不是钦此）
+- `list_folders()` 里 **#10 不出现在 `merged` 结果中**（它是打回关闭不是画可）
 
 ---
 
@@ -245,20 +245,20 @@ R7 是「不发生什么」的要求，**不发生的事只能靠一条主动去
 
 ### 10.1 作者判定：多一个 marker
 
-zhupi 有一条**降级路径**（`zhupi/src/ui.js:545-553`）：草稿写于旧版本（`stale = d.ref !== ref`）或行号锚不到可批注行时，那些朱批不进 inline，被塞进 review body，前缀是「以下朱批锚定不到可批注行（或写于旧版本），并入总批：」。
+门下 有一条**降级路径**（`menxia/src/ui.js:545-553`）：草稿写于旧版本（`stale = d.ref !== ref`）或行号锚不到可批注行时，那些涂归不进 inline，被塞进 review body，前缀是「以下朱批锚定不到可批注行（或写于旧版本），并入总批：」。
 
 两个后果，都严重且静默：
 
-- **只要有一条降级**，整个 review body 就不再是「御笔朱批 · N 条」→ 这一批里**成功锚上的**批注全被判成非朱批台 → `answered=true` → 看不见；
+- **只要有一条降级**，整个 review body 就不再是「御笔朱批 · N 条」→ 这一批里**成功锚上的**批注全被判成非门下 → `answered=true` → 看不见；
 - **若全部降级**，review 里零条 comment，他写的东西只存在于 body 里 → 工具直接说「这折没事」。
 
-而「隔夜草稿 + agent 推过改版」正是最常见的形态。故 `isDeskBody` 认两个 marker，且降级 body 的正文被捞出来当 conversation 项（zhupi 自己的说法就是「并入总批」），并且**确定是他发的**，作者不用猜。
+而「隔夜草稿 + agent 推过改版」正是最常见的形态。故 `isDeskBody` 认两个 marker，且降级 body 的正文被捞出来当 conversation 项（门下 自己的说法就是「并入判」），并且**确定是他发的**，作者不用猜。
 
 ### 10.2 「已回」不再是确定值
 
 §3.1 写着 `answered: boolean`，**确定值不是猜**。那句话是错的：他从 GitHub 网页在串里回一句，与 agent 回话完全同形（都是空 body review）。v2 的判据会因此把串标成已回 —— **他一开口，工具反而更安静**，这是最坏的一种错。
 
-现在：朱批根批注**有回话**的一律进 `unclear` + `attention`，预览取**最后一条回话**的正文（「我方回话：已改」和「不对，我说的是第二段」一眼可分）。代价实测很小：9 折只多 2 条 attention。
+现在：涂归根批注**有回话**的一律进 `unclear` + `attention`，预览取**最后一条回话**的正文（「我方回话：已改」和「不对，我说的是第二段」一眼可分）。代价实测很小：9 折只多 2 条 attention。
 
 ### 10.3 counts 改名并重新定义
 
@@ -280,11 +280,11 @@ zhupi 有一条**降级路径**（`zhupi/src/ui.js:545-553`）：草稿写于旧
 - `quote` 要按 `side` 取侧：`LEFT`（批注锚在被删除的那一行）得留 `-` 行、滤 `+` 行，否则会引一句他根本没划的话。
 - 孤儿回话（根被删或被截断）单独成串，不静默丢弃。
 
-### 10.7 总批的 answered 改用本地记录（review#29 + 第一轮评审）
+### 10.7 判的 answered 改用本地记录（review#29 + 第一轮评审）
 
 §3.2 那套「会话区按位置推断」**已废**。它成立的前提是「会话区是双方 channel」；
 agent 不再发折级小结之后它变成单方收件箱，`i < len-1 → 已答` 于是把
-「他连发两条总批」的前一条静默判成已答（**漏报**）。
+「他连发两条判」的前一条静默判成已答（**漏报**）。
 
 现行：`answered` 只有 `handled` / `pending`，取自本地 `~/.zhupi-mcp/processed.json`。
 `counts.hasFollowUp` 一并删除 —— 它数的就是那个坏推断的产物。
@@ -293,10 +293,10 @@ R7 的口径精确成「**不写远端**」：`processed.ts` 是全项目唯一�
 `guard.ts` 有规则焊死「`src/` 里除它之外不许出现 fs 写」。
 
 第一轮评审在此之上又抓到三条高危，一并定型：
-1. **记的是 `id → 当时的 updated_at`，不是光记 id。** 他原地编辑一条已 handled 的总批时
+1. **记的是 `id → 当时的 updated_at`，不是光记 id。** 他原地编辑一条已 handled 的判时
    id 不变，只记 id 会让那句新话永不出现 —— 正是本节要杀的漏报换了个形态。
 2. **`load` 必须分清「文件不存在」和「读不出来」。** 后者拒绝写：拿读失败的空基线
    `save` 一次会把所有折的记录永久抹掉（并发实测 2.5% 触发）。`save` 改成 temp + rename 原子写，
    `commit` 落盘前重读合并。
-3. **`seed` 改两步。** 它会连 zhupi 降级并入总批的**他的朱批**一起标掉（评审在 #9 上实测），
+3. **`seed` 改两步。** 它会连 门下 降级并入判的**他的涂归**一起标掉（评审在 #9 上实测），
    而它不可见也曾不可撤销。现在不带 `confirm` 只返回预览，且新增 `undo`。

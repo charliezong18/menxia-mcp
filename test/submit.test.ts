@@ -35,7 +35,7 @@ describe('回话前缀焊死（硬约定③）', () => {
     expect(withReplyPrefix('**回话** 采纳')).toBe('**回话** 采纳');
   });
 
-  // 朱批台自己已有 `回话 · <login>` 标签，reply 正文又走 markdown 渲染 ——
+  // 门下自己已有 `回话 · <login>` 标签，reply 正文又走 markdown 渲染 ——
   // `**回话**\n\n正文` 会渲染出独占一行的加粗「回话」，在他 300px 宽的批注栏里是三层重复。
   it('绝不产生独占一行的「回话」', () => {
     expect(withReplyPrefix('正文')).not.toMatch(/^\*\*回话\*\*\s*\n/);
@@ -47,8 +47,8 @@ describe('回话前缀焊死（硬约定③）', () => {
   });
 });
 
-describe('主输出是朱批台深链，不是 PR 链接', () => {
-  it('deskUrl 指向朱批台', () => {
+describe('主输出是门下深链，不是 PR 链接', () => {
+  it('deskUrl 指向门下', () => {
     expect(deskUrl(36)).toBe('https://charliezong18.github.io/menxia/?pr=36');
   });
 
@@ -95,7 +95,7 @@ describe('open_folder 入参校验（跑在任何网络/文件动作之前）', 
   });
 });
 
-describe('reply_comment：总批那条路已经关了（C3）', () => {
+describe('reply_comment：判那条路已经关了（C3）', () => {
   it('省掉 commentId —— 拒，且告诉他小结该去哪说', async () => {
     const e = await handleTool('reply_comment', { pr: 1, body: 'x' }).catch((err: unknown) => err);
     const msg = String((e as Error).message);
@@ -112,7 +112,7 @@ describe('reply_comment：总批那条路已经关了（C3）', () => {
       .rejects.toThrow(/只认/);
   });
 
-  it('工具面上没有「发总批」这个能力（不是靠描述劝阻，是根本没有）', () => {
+  it('工具面上没有「发判」这个能力（不是靠描述劝阻，是根本没有）', () => {
     const schema = TOOLS.find((t) => t.name === 'reply_comment')!.inputSchema;
     expect(schema.required).toContain('commentId');
     expect(JSON.stringify(TOOLS)).not.toContain('issues/{issue_number}/comments');
@@ -133,7 +133,7 @@ describe('audit_folders：纯只读', () => {
 
 // ── 三轮评审（2026-07-30）之后补的 ──
 
-describe('回话前缀不能毁掉块级 markdown（第三轮：zhupi 走 markdown-it 渲染 reply）', () => {
+describe('回话前缀不能毁掉块级 markdown（第三轮：menxia 走 markdown-it 渲染 reply）', () => {
   // `**回话** ` + 一行围栏 = 行内 code span，代码块整段糊成一段话。
   it('首行是围栏 / 列表 / 标题 / 引用 / 表格 —— 前缀另起一段', () => {
     for (const body of ['```ts\nconst x = 1;\n```', '- 第一条\n- 第二条', '## 小标题', '> 引文', '| a | b |']) {
@@ -176,7 +176,7 @@ describe('回话前缀不能毁掉块级 markdown（第三轮：zhupi 走 markdo
   });
 });
 
-describe('图落到哪个路径（第三轮：奏折仓真实布局是 docs/assets/<子目录>/…）', () => {
+describe('图落到哪个路径（第三轮：敕草仓真实布局是 docs/assets/<子目录>/…）', () => {
   it('源路径里有 /assets/ —— 保留它后面整段', () => {
     expect(assetTarget('/local/imgs/assets/shots/setup.png')).toBe('docs/assets/shots/setup.png');
     expect(assetTarget('/a/assets/x/y/z.png')).toBe('docs/assets/x/y/z.png');

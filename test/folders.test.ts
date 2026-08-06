@@ -114,7 +114,7 @@ describe('attention 与排序（第二轮可用性评审的产物）', () => {
   });
 });
 
-describe('state=merged 的过滤（评审：#10 是打回关闭不是钦此）', () => {
+describe('state=merged 的过滤（评审：#10 是打回关闭不是画可）', () => {
   it('取 closed 之后按 merged_at 过滤', async () => {
     const closed = [pull(10, { merged_at: null }), pull(19, { merged_at: '2026-07-29T00:00:00Z' })];
     get.mockImplementation(async (route: string) => (route.endsWith('/pulls') ? closed : []));

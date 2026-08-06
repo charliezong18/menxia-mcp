@@ -32,7 +32,7 @@ Default: both, as the `SPEC.md` / `SPEC.zh-CN.md` pair already here. The cost is
 | Does MCP stop bypassing? | No. Routing is a separate problem with a separate fix, shipped first as Phase 0 | 07-28 |
 | Tool scope | Six tools. Final approval (merge) deliberately excluded — that is the human's click | 07-28 |
 | Wrap the scripts, or rewrite? | Full rewrite in TypeScript with tests; scripts retire at Phase 4 | 07-28 |
-| Where does it live? | Its own public repo, paired with zhupi as product + agent side | 07-28 |
+| Where does it live? | Its own public repo, paired with menxia as product + agent side | 07-28 |
 | Language-direction check | Check by ratio: strip code blocks and inline code, then measure CJK share — error above 30% in the English file, below 30% in the Chinese one | 07-28 |
 | Five-section body, block or warn? | Warn. The code was right and the documentation was wrong; the doc gets fixed at Phase 4 | 07-28 |
 | Pass documents by path or by value? | By path. The server copies them in; the agent never touches the folder repo | 07-28 |

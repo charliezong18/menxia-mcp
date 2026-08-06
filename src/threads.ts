@@ -2,9 +2,9 @@
 // 无 IO、无网络 import。这是 Phase 1 唯一「写错了不报错、只是答案悄悄不对」的模块。
 //
 // 作者判定的依据见 design §3.0：
-//   zhupi 提交批注走 POST /pulls/{n}/reviews，review body 固定为「门下 · N 条」；
+//   menxia 提交批注走 POST /pulls/{n}/reviews，review body 固定为「门下 · N 条」；
 //   agent 回话走 /comments/{id}/replies，GitHub 为它自动建一个 body 为空的 review。
-//   而 zhupi 没有任何发 reply 的代码路径。
+//   而 menxia 没有任何发 reply 的代码路径。
 // 所以 pull_request_review_id 回查 review body 即可判作者，且追溯有效。
 
 // 新旧两种都认，**永久**：2026-07-31 阅读台把这串从「御笔朱批 · N 条」改成「门下 · N 条」，
@@ -13,7 +13,7 @@
 export const DESK_MARK = /^(门下|御笔朱批)/;
 
 /**
- * zhupi 的降级路径（zhupi/src/ui.js:545-553）：草稿写于旧版本（`stale = d.ref !== ref`）
+ * menxia 的降级路径（menxia/src/ui.js:545-553）：草稿写于旧版本（`stale = d.ref !== ref`）
  * 或行号锚不到可批注行时，那些涂归**不进 inline，被塞进 review body**，前缀是这一句。
  *
  * 两个后果，都严重且静默：
@@ -109,7 +109,7 @@ export interface ConversationItem {
   body: string;
   author: string | null;
   createdAt: string;
-  /** true = 确定是他发的（zhupi 降级并入判的涂归） */
+  /** true = 确定是他发的（menxia 降级并入判的涂归） */
   fromDesk?: boolean;
   /** handled = 我方记过已处理；pending = 要处理。不再是推断。 */
   answered: ConversationVerdict;
@@ -172,8 +172,8 @@ export function isFromDesk(c: RawInlineComment, bodies: Map<number, string>): bo
 }
 
 /**
- * 被 zhupi 降级塞进 review body 的涂归。zhupi 自己的说法就是「并入判」，
- * 所以按判处理——而且这类**确定是他发的**（带 zhupi 的前缀），作者不用猜。
+ * 被 menxia 降级塞进 review body 的涂归。menxia 自己的说法就是「并入判」，
+ * 所以按判处理——而且这类**确定是他发的**（带 menxia 的前缀），作者不用猜。
  */
 export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
   return reviews
@@ -184,8 +184,8 @@ export function deskFallbackNotes(reviews: RawReview[]): RawIssueComment[] {
       // 「（或写于旧版本），并入判：」占 preview 前 80 字的 41%，
       // 而 preview 是 seed 决策唯一的依据面。
       body: (r.body ?? '')
-        .replace(/^以下(?:涂归|朱批)锚定不到可批注行（或写于旧版本）[，,]\s*并入(?:判|总批)[：:]\s*/, '（涂归锚不到行，zhupi 并入判）\n\n')
-        .replace(DESK_FALLBACK_MARK, '（涂归锚不到行，zhupi 并入判）'),
+        .replace(/^以下(?:涂归|朱批)锚定不到可批注行（或写于旧版本）[，,]\s*并入(?:判|总批)[：:]\s*/, '（涂归锚不到行，menxia 并入判）\n\n')
+        .replace(DESK_FALLBACK_MARK, '（涂归锚不到行，menxia 并入判）'),
       created_at: r.submitted_at ?? '',
       user: null,
     }));
@@ -216,7 +216,7 @@ export const OUR_REPLY_MARK = /^\s*\*\*回话\*\*/;
  * 直接在串里回过话，会被静默认成我方 → 漏报，正是本项目最贵的失效。
  * 前一轮评审专门写了一条测试防它，我的日期版把那条测试打破了，这就是信号。
  *
- * 这 12 条怎么核的（2026-07-30）：① zhupi 源码里**没有回复 inline 串的 UI**
+ * 这 12 条怎么核的（2026-07-30）：① menxia 源码里**没有回复 inline 串的 UI**
  * （写口只有 submitReview / createIssueComment / mergePR / markReady）；
  * ② 12 条回话与 12 条空 body review 一一对应，全部出自 agent 的 `/replies` 调用；
  * ③ 时间戳成组聚在 1–2 秒内，是脚本循环的指纹，不是人手打的。

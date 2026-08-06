@@ -47,7 +47,7 @@ describe('fixture 本身的形状（这些断言在保护后面全部测试的�
 });
 
 describe('作者判定：靠 review body，不靠 user.login', () => {
-  it('朱批台呈上来的 review body 带「御笔朱批」', () => {
+  it('门下呈上来的 review body 带「御笔朱批」', () => {
     const bodies = reviewBodyById(pr17Reviews);
     const desk = pr17Comments.filter((c) => isFromDesk(c, bodies));
     expect(desk).toHaveLength(2);
@@ -69,7 +69,7 @@ describe('作者判定：靠 review body，不靠 user.login', () => {
     expect(b).toEqual(a);
   });
 
-  it('review id 查不到时保守判为「非朱批台」', () => {
+  it('review id 查不到时保守判为「非门下」', () => {
     const bodies = reviewBodyById(pr17Reviews);
     expect(isFromDesk({ ...pr17Comments[0]!, pull_request_review_id: 999999 }, bodies)).toBe(false);
     expect(isFromDesk({ ...pr17Comments[0]!, pull_request_review_id: null }, bodies)).toBe(false);
@@ -135,12 +135,12 @@ describe('inline 串还原', () => {
 
   it('串再长也不会因为他在里面反驳就变成已回——他的反驳走的是新根批注', () => {
     // GitHub 把整串 reply 都指向根。若照 v1「有 reply 就算已回」，
-    // 他在串里的反驳会让整串显示成已回。v2 靠作者判，反驳若来自朱批台则是新根。
+    // 他在串里的反驳会让整串显示成已回。v2 靠作者判，反驳若来自门下则是新根。
     const deskReviewId = pr17Reviews.find((r) => /御笔朱批/.test(r.body ?? ''))!.id;
     const hisRebuttal: RawInlineComment = {
       ...pr17Comments[2]!,
       id: 222,
-      pull_request_review_id: deskReviewId, // 来自朱批台
+      pull_request_review_id: deskReviewId, // 来自门下
     };
     const t = buildInlineThreads([...pr17Comments, hisRebuttal], pr17Reviews);
     // 断言必须落在**这条反驳真正挂着的那个根**上。
@@ -283,12 +283,12 @@ describe('第二轮评审的三处修复', () => {
   });
 });
 
-describe('第三轮评审：他不走朱批台的两条路（明早最可能踩的）', () => {
+describe('第三轮评审：他不走门下的两条路（明早最可能踩的）', () => {
   const deskId = () => pr17Reviews.find((r) => /御笔朱批/.test(r.body ?? ''))!.id;
   const emptyId = () => pr17Reviews.find((r) => !r.body)!.id;
 
-  it('zhupi 降级把朱批塞进 review body —— 不能当没看见', () => {
-    // zhupi/src/ui.js:551：草稿写于旧版本或行号锚不到时，那些朱批不进 inline，
+  it('menxia 降级把涂归塞进 review body —— 不能当没看见', () => {
+    // menxia/src/ui.js:551：草稿写于旧版本或行号锚不到时，那些涂归不进 inline，
     // 被塞进 review body。全部降级时 review 里零条 comment，他写的东西只在 body 里。
     const fallback: RawReview = {
       id: 9001,
@@ -307,7 +307,7 @@ describe('第三轮评审：他不走朱批台的两条路（明早最可能踩�
 
   it('只要有一条降级，整批成功锚上的批注也不能被判成我方', () => {
     // 降级时整个 review body 不再是「御笔朱批 · N 条」，
-    // 于是这一批里**成功锚上的**批注会被判成非朱批台 → answered=true → 看不见。
+    // 于是这一批里**成功锚上的**批注会被判成非门下 → answered=true → 看不见。
     const mixed: RawReview = { id: 9002, body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\nA' };
     const anchored: RawInlineComment = { ...pr17Comments[0]!, id: 9100, pull_request_review_id: 9002 };
     delete (anchored as { in_reply_to_id?: unknown }).in_reply_to_id;
@@ -346,7 +346,7 @@ describe('第三轮评审：他不走朱批台的两条路（明早最可能踩�
     expect(t.every((x) => x.replies.length === 1 && x.replies[0]!.ours === true)).toBe(true);
   });
 
-  it('降级 review 与普通总批按时间混排', () => {
+  it('降级 review 与普通判按时间混排', () => {
     const note: RawReview = {
       id: 9003, body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\n晚说的',
       submitted_at: '2026-07-29T23:00:00Z',
@@ -357,7 +357,7 @@ describe('第三轮评审：他不走朱批台的两条路（明早最可能踩�
   });
 });
 
-describe('总批的 answered 改用本地记录（review#29）', () => {
+describe('判的 answered 改用本地记录（review#29）', () => {
   const mk = (id: number, body: string, at: string): RawIssueComment => ({ id, body, created_at: at, user: null });
   const three = [
     mk(1, '第一条', '2026-07-29T10:00:00Z'),
@@ -399,7 +399,7 @@ describe('总批的 answered 改用本地记录（review#29）', () => {
     }
   });
 
-  it('降级并入总批的朱批同样受记录管', () => {
+  it('降级并入判的涂归同样受记录管', () => {
     const note: RawReview = { id: 900, body: '以下朱批锚定不到可批注行（或写于旧版本），并入总批：\n\nA', submitted_at: '2026-07-29T13:00:00Z' };
     const notes = deskFallbackNotes([note]);
     expect(classifyConversation([], notes)[0]!.answered).toBe('pending');
@@ -423,7 +423,7 @@ describe('`**回话**` 前缀：把「判不了」变成「确定」（第一轮
     id, path: 'docs/a.md', body, created_at: at,
     in_reply_to_id: 1, diff_hunk: '', pull_request_review_id: 901,
   });
-  // 900 是朱批台发的（review body 带 marker）；901 是 /replies 自动建的空 body review——
+  // 900 是门下发的（review body 带 marker）；901 是 /replies 自动建的空 body review——
   // 他从 GitHub 网页在串里回话产生的也是空 body，两者完全同形。
   const reviews: RawReview[] = [
     { id: 900, body: '御笔朱批 · 1 条', submitted_at: '2026-08-01T10:00:00Z' },
@@ -432,7 +432,7 @@ describe('`**回话**` 前缀：把「判不了」变成「确定」（第一轮
 
   it('isOurReply 只认首行的加粗前缀', () => {
     expect(isOurReply('**回话**\n\n改了')).toBe(true);
-    expect(isOurReply('**回话** 改了')).toBe(true);   // 同行写法（朱批台上不重复）
+    expect(isOurReply('**回话** 改了')).toBe(true);   // 同行写法（门下上不重复）
     expect(isOurReply('  **回话** 改了')).toBe(true);
     expect(isOurReply('改了。**回话**')).toBe(false);
     expect(isOurReply('回话：改了')).toBe(false);
@@ -464,7 +464,7 @@ describe('`**回话**` 前缀：把「判不了」变成「确定」（第一轮
     expect(attentionOf(t, [])[0]!.preview).toContain('我说的是第二段');
   });
 
-  it('总批带 updatedAt，供 mark_handled 记水位', () => {
+  it('判带 updatedAt，供 mark_handled 记水位', () => {
     const c: RawIssueComment = {
       id: 5, body: '看看', created_at: '2026-07-29T10:00:00Z', updated_at: '2026-07-29T18:00:00Z',
     };
@@ -476,7 +476,7 @@ describe('`**回话**` 前缀：把「判不了」变成「确定」（第一轮
 
 describe('conversationEntriesOf：水位必须取 updated_at（第二轮评审的接缝）', () => {
   // 这个接缝上一版没有测试：把它改成 created_at 之后 175 条全绿，
-  // 而真数据上「他编辑过的总批」立刻被吞回 handled —— 原漏报复现。
+  // 而真数据上「他编辑过的判」立刻被吞回 handled —— 原漏报复现。
   it('有 updated_at 就用它', () => {
     expect(conversationEntriesOf([
       { id: 1, body: 'x', created_at: '2026-07-29T10:00:00Z', updated_at: '2026-07-29T20:00:00Z' },

@@ -65,7 +65,7 @@ function snap(over: Partial<Snapshot> = {}): Snapshot {
 }
 
 describe('疤 · 2026-07-27「他读到断图」', () => {
-  // 病历：一折引用的图没一起搬进奏折仓，他在朱批台上读到的是断图。
+  // 病历：一折引用的图没一起搬进敕草仓，他在门下上读到的是断图。
   // 这条是规则 4 存在的全部理由，硬伤不是警告。
   it('引用了仓里没有的图 → 硬伤，呈折必须被拦', () => {
     const files = new Map([['docs/a.md', `${EN('a')}\n\n![立面图](assets/sd-02.png)`], ['docs/a.zh-CN.md', ZH('a')]]);
@@ -128,7 +128,7 @@ describe('疤 · pre-push 那次「拦太死把人逼向绕过闸门」', () => 
 
 describe('疤 · `.payload` 例外「只存在于代码里，SKILL.md 从没写过」', () => {
   // 病历（SPEC §5.1 规则 3）：docs/.payload 登记的「待发正文」免英文版互链头 ——
-  // 加了会把那行一起贴进对外 issue。代价是它在 zhupi 里切不了语言，
+  // 加了会把那行一起贴进对外 issue。代价是它在 menxia 里切不了语言，
   // 由中文版的「不要从本页复制」横幅兜底。
   // 这条在任何文档里都查不到，只有 folder-lint.sh 第 65-67 行知道。删掉它不会有测试变红——除了这一条。
   const bare = '待发正文，第一行就是正文本身。';
@@ -149,8 +149,8 @@ describe('疤 · `.payload` 例外「只存在于代码里，SKILL.md 从没写�
   });
 });
 
-describe('疤 · 互链头「zhupi 的语言切页按它认对子」', () => {
-  // 病历：互链头不是装饰，是 zhupi 用来配对中英版本的键。差一个字符就切不了语言。
+describe('疤 · 互链头「menxia 的语言切页按它认对子」', () => {
+  // 病历：互链头不是装饰，是 menxia 用来配对中英版本的键。差一个字符就切不了语言。
   // 所以是逐字符匹配，不是「含有 English 字样」。
   it('多一个字都不行', () => {
     const files = new Map([['docs/a.md', '**English** · [中文](a.zh-CN.md) '], ['docs/a.zh-CN.md', ZH('a')]]);
@@ -227,7 +227,7 @@ describe('疤 · 2026-07-28「整篇翻反了不拦」（刻意改进 #1）', ()
 
   it('**中英混排的正常英文版不误报** —— 术语表和专名撑不到阈值', () => {
     const files = new Map([
-      ['docs/a.md', EN('a', '\n\nA folder is 奏折, an annotation is 朱批, and sealing it is 钦此. The rest of this document is ordinary English prose that runs on long enough to dominate the ratio.')],
+      ['docs/a.md', EN('a', '\n\nA folder is 敕草, an annotation is 涂归, and sealing it is 画可. The rest of this document is ordinary English prose that runs on long enough to dominate the ratio.')],
       ['docs/a.zh-CN.md', ZH('a')],
     ]);
     expect(lint(snap({ files })).some((x) => x.rule === 5)).toBe(false);
@@ -304,7 +304,7 @@ describe('疤 · 2026-07-30「中文名文件全挂」（我引入的回归）',
   // （core.quotePath 默认 on）。不关掉的话 assets 集合里是转义串、正文引用是真名，
   // 永远对不上 → 中文名的图一律误报断图（硬伤，好折被拦死且改不掉）；
   // changed 里的路径也带引号 → git show 必失败 → 双语齐的也报缺译本。
-  // 实测：奏折仓 #31 那折 22 个中文名文档全部踩在上面。
+  // 实测：敕草仓 #31 那折 22 个中文名文档全部踩在上面。
   it('中文名的图真在仓里 → 不许报断图；中文名双语对 → 不许报缺译本', () => {
     const { dir, wt, g } = repo();
     try {
@@ -496,13 +496,13 @@ describe('疤 · cjkRatio 必须先剥代码（strip.ts 头注释点名的危害
   });
 });
 
-describe('疤 · 2026-07-30「互链头规则的立身理由是假的」（第三轮：读 zhupi 源码）', () => {
-  // 病历：规则原本写着「zhupi 的语言切页按互链头认对子，差一个字符就切不了」。
-  // 读源码实测：`zhupi/src/lang.js:6` 只有一条 `/\.zh-CN\.md$/i`，
+describe('疤 · 2026-07-30「互链头规则的立身理由是假的」（第三轮：读 menxia 源码）', () => {
+  // 病历：规则原本写着「menxia 的语言切页按互链头认对子，差一个字符就切不了」。
+  // 读源码实测：`menxia/src/lang.js:6` 只有一条 `/\.zh-CN\.md$/i`，
   // 注释自己写着「检测只认『同 basename + .zh-CN 后缀』这一条规则，不去猜正文语言」。
-  // **zhupi 从头到尾没读过首行。**
+  // **menxia 从头到尾没读过首行。**
   //
-  // 于是逐字符匹配 + 硬伤这个组合，实测正在拦 #12 —— 而 #12 在朱批台上渲染完全正常，
+  // 于是逐字符匹配 + 硬伤这个组合，实测正在拦 #12 —— 而 #12 在门下上渲染完全正常，
   // 偏差只是分隔符写成 `|` 和路径带 `./`。17 个 open 折拦住 2 个，两个都不是真问题。
   const pair = (enFirst: string): Snapshot => {
     const files = new Map([
@@ -512,11 +512,11 @@ describe('疤 · 2026-07-30「互链头规则的立身理由是假的」（第�
     return { files, changed: [...files.keys()], assets: new Set(), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
   };
 
-  it('`|` 代替 `·` → 不拦（zhupi 不看这个字符）', () => {
+  it('`|` 代替 `·` → 不拦（menxia 不看这个字符）', () => {
     expect(hasHard(lint(pair('**English** | [中文](a.zh-CN.md)')))).toBe(false);
   });
 
-  it('`./` 前缀 → 不拦（zhupi 的 link.js 会吃掉它）', () => {
+  it('`./` 前缀 → 不拦（menxia 的 link.js 会吃掉它）', () => {
     expect(hasHard(lint(pair('**English** · [中文](./a.zh-CN.md)')))).toBe(false);
   });
 
@@ -526,10 +526,10 @@ describe('疤 · 2026-07-30「互链头规则的立身理由是假的」（第�
   });
 });
 
-describe('疤 · 2026-07-30「子目录文档的图是漏报」（第三轮：读 zhupi 源码）', () => {
-  // 病历：`zhupi/src/render.js:26` 注释写死「base 用 md 文件自身所在目录（不是写死的 docs/），
+describe('疤 · 2026-07-30「子目录文档的图是漏报」（第三轮：读 menxia 源码）', () => {
+  // 病历：`menxia/src/render.js:26` 注释写死「base 用 md 文件自身所在目录（不是写死的 docs/），
   // 否则根目录或子目录的文档全解析错」。而上一版一律按 docs/ 拼 —— 于是图放在
-  // docs/assets/ 时 lint 说「图在」而 zhupi 显示断图。**方向是漏报**，
+  // docs/assets/ 时 lint 说「图在」而 menxia 显示断图。**方向是漏报**，
   // 正好是规则 4 唯一要防的那件事。
   const sub = (assets: string[]): Snapshot => {
     const files = new Map([
@@ -539,11 +539,11 @@ describe('疤 · 2026-07-30「子目录文档的图是漏报」（第三轮：�
     return { files, changed: [...files.keys()], assets: new Set(assets), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
   };
 
-  it('图在 docs/sub/assets/ → 过（zhupi 就是这么解析的）', () => {
+  it('图在 docs/sub/assets/ → 过（menxia 就是这么解析的）', () => {
     expect(lint(sub(['sub/assets/p.png'])).some((f) => f.rule === 4)).toBe(false);
   });
 
-  it('**图只在 docs/assets/ → 报断图**（上一版会放行，而 zhupi 显示断图）', () => {
+  it('**图只在 docs/assets/ → 报断图**（上一版会放行，而 menxia 显示断图）', () => {
     const f = lint(sub(['assets/p.png'])).filter((x) => x.rule === 4);
     expect(f).toHaveLength(1);
     expect(f[0]!.subject).toBe('sub/assets/p.png');

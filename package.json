@@ -1,7 +1,7 @@
 {
   "name": "menxia-mcp",
   "version": "0.1.0",
-  "description": "Agent-side MCP server for zhupi — the annotation desk.",
+  "description": "Agent-side MCP server for menxia — the annotation desk.",
   "license": "MIT",
   "author": "Charlie Zong",
   "type": "module",
@@ -10,11 +10,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/charliezong18/zhupi-mcp.git"
+    "url": "git+https://github.com/charliezong18/menxia-mcp.git"
   },
-  "homepage": "https://github.com/charliezong18/zhupi-mcp#readme",
+  "homepage": "https://github.com/charliezong18/menxia-mcp#readme",
   "bugs": {
-    "url": "https://github.com/charliezong18/zhupi-mcp/issues"
+    "url": "https://github.com/charliezong18/menxia-mcp/issues"
   },
   "scripts": {
     "build": "tsc",

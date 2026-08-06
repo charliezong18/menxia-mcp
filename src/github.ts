@@ -103,7 +103,7 @@ export function installWriteGate(oc: Octokit, allow: readonly string[] = WRITE_A
     const method = String(options.method ?? '').toUpperCase();
     const url = String(options.url ?? '');
     if (!set.has(`${method} ${url}`)) {
-      throw new Error(`zhupi-mcp 的写入白名单里没有这一条，拦下了：${method} ${url}`);
+      throw new Error(`menxia-mcp 的写入白名单里没有这一条，拦下了：${method} ${url}`);
     }
     return request(options);
   });

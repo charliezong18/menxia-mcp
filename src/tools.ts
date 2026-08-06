@@ -47,7 +47,7 @@ export const TOOLS = [
       '`fromDesk=true` **确定**是他从门下说的。**两个都 false 表示判不了**' +
       '（他从 GitHub 网页在串里回话，与 agent 回话在 API 里完全同形）\n' +
       '· conversation —— 会话区判。`answered` 是 handled / pending 两值，**取自本地已处理记录，不是推断**；' +
-      'fromDesk=true 的是 zhupi 因为锚不到行而并入判的涂归\n' +
+      'fromDesk=true 的是 menxia 因为锚不到行而并入判的涂归\n' +
       '· inline[].answered —— 只在 fromDesk=true 时有意义；fromDesk=false 表示这条根批注' +
       '不是从门下来的（可能是他从 GitHub 网页发的，也可能是 agent 自己发的），此时看 attention。' +
       '`orphan=true` 表示它回复的根批注不在结果里（根被删），一律按未回处理\n' +
@@ -411,7 +411,7 @@ export async function handleTool(
       const targets = all.filter((e) => e.answered === 'pending');
       if (args.confirm === undefined) {
         // **只预览，不写。** seed 是全系统唯一不可逆又不可见的操作，而它吞掉的可能是
-        // 他的涂归本身（zhupi 锚不到行会把批注并入判）——评审在 #9 上实测过一次。
+        // 他的涂归本身（menxia 锚不到行会把批注并入判）——评审在 #9 上实测过一次。
         return {
           repo: ref.slug,
           pr,
@@ -419,12 +419,12 @@ export async function handleTool(
           wouldMark: targets.length,
           targets,
           // **默认就警告。** 上一版只在 `fromDesk` 为真时警告，而第三轮评审实测
-          // 那条路径（zhupi 锚不到行降级并入判）在生产里 **0/16 折触发过** ——
+          // 那条路径（menxia 锚不到行降级并入判）在生产里 **0/16 折触发过** ——
           // 于是唯一的护栏是死的，而他 99% 的判都是 fromDesk:false，拿到的是让人放心的那句。
           hint:
             `⚠️ 这些判的作者 API 分不出来（共用账号）。逐条看 preview 再决定 —— ` +
             `标掉的东西在所有工具输出里都消失，且他不可能发现。` +
-            (targets.some((t) => t.fromDesk) ? '**其中带 fromDesk 的确定是他的涂归**（zhupi 降级并入），尤其别标。' : '') +
+            (targets.some((t) => t.fromDesk) ? '**其中带 fromDesk 的确定是他的涂归**（menxia 降级并入），尤其别标。' : '') +
             `确认要标就调 { pr: ${pr}, seed: true, confirm: ${targets.length} }。`,
         };
       }

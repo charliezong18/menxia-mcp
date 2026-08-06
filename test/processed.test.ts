@@ -10,7 +10,7 @@ import {
 // 「已处理」放本地不放 GitHub（review#29）。两条不变量，第一轮评审在这两条上各抓了一个高危：
 //   ① **失效方向永远是多报** —— 读不到就当全部未处理，绝不静默把他的话吞成已答。
 //      而且**写路径也得成立**：拿读失败的空基线覆写会把别的折全抹掉。
-//   ② **他改了那条总批就要重新浮上来** —— 只记 id 认不出原地编辑。
+//   ② **他改了那条判就要重新浮上来** —— 只记 id 认不出原地编辑。
 
 let dir: string, file: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'zhupi-state-')); file = join(dir, 'processed.json'); });

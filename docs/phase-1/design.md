@@ -84,7 +84,7 @@ With a shared account, "who wrote it" is dead as a signal. The two data shapes n
 
 ### 3.3 The real fix belongs to Phase 3
 
-When `reply_comment` posts a conversation comment, it embeds an invisible marker (`<!-- zhupi-mcp:reply -->`, following the session-backlink precedent). From then on conversation comments can be determined exactly, and three states collapse back to two.
+When `reply_comment` posts a conversation comment, it embeds an invisible marker (`<!-- menxia-mcp:reply -->`, following the session-backlink precedent). From then on conversation comments can be determined exactly, and three states collapse back to two.
 
 Phase 1 is read-only and cannot place markers, hence the approximation. **Historical conversation comments will always depend on ordering** — that is not retroactively fixable, and is written down here so nobody later chases it as a bug.
 
@@ -189,14 +189,14 @@ No caching, no pagination tuning, no GraphQL, no request concurrency control. Al
 
 ### 10.1 Authorship: there is a second marker
 
-zhupi has a **fallback path** (`zhupi/src/ui.js:545-553`): when a draft was written against an older revision (`stale = d.ref !== ref`) or its line cannot be anchored, those annotations do not become inline comments — they are folded into the review body, prefixed with "以下朱批锚定不到可批注行（或写于旧版本），并入总批：".
+menxia has a **fallback path** (`menxia/src/ui.js:545-553`): when a draft was written against an older revision (`stale = d.ref !== ref`) or its line cannot be anchored, those annotations do not become inline comments — they are folded into the review body, prefixed with "以下朱批锚定不到可批注行（或写于旧版本），并入总批：".
 
 Two consequences, both severe and silent:
 
 - **One fallback is enough** to strip the "御笔朱批 · N 条" marker from the whole review body → every *successfully anchored* annotation in that batch reads as not-from-desk → `answered=true` → invisible;
 - **If all fall back**, the review carries zero comments and his words exist only in the body → the tool reports "nothing to do here".
 
-And "an overnight draft plus a revision pushed by the agent" is the most common shape of all. So `isDeskBody` recognizes both markers, and the fallback body's content is lifted out as a conversation item (zhupi's own wording is "folded into the overall comment") — **and it is definitely his**, so authorship needs no guessing there.
+And "an overnight draft plus a revision pushed by the agent" is the most common shape of all. So `isDeskBody` recognizes both markers, and the fallback body's content is lifted out as a conversation item (menxia's own wording is "folded into the overall comment") — **and it is definitely his**, so authorship needs no guessing there.
 
 ### 10.2 "Answered" is no longer a determinate value
 
@@ -245,6 +245,6 @@ Round one of review found three more high-severity issues on top; all are now fi
 2. **`load` must distinguish "file absent" from "unreadable".** The latter refuses to write:
    saving from a failed-read empty baseline permanently erases every folder's record
    (measured at 2.5% under concurrency). `save` is now temp + rename; `commit` re-reads and merges.
-3. **`seed` is now two-step.** It would also mark **his own annotations** that zhupi folded
+3. **`seed` is now two-step.** It would also mark **his own annotations** that menxia folded
    into the conversation area (measured on #9), and it was invisible and irreversible.
    Without `confirm` it only previews, and `undo` was added.

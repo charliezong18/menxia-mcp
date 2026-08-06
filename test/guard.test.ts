@@ -221,7 +221,7 @@ describe('白名单的长度被钉死（否则它会悄悄变长）', () => {
     expect(FS_WRITE_ALLOWED.size).toBe(2);
   });
 
-  it('git 写白名单恰好一个成员 —— SPEC §4.2：唯一碰奏折仓的模块', () => {
+  it('git 写白名单恰好一个成员 —— SPEC §4.2：唯一碰敕草仓的模块', () => {
     expect([...GIT_WRITE_ALLOWED]).toEqual(['src/worktree.ts']);
     expect(GIT_WRITE_ALLOWED.size).toBe(1);
   });

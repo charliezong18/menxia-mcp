@@ -130,12 +130,12 @@ const IMPROVEMENTS = [
     why: '规则4 兼查 HTML `<img src>`（SPEC §5.2 改进 #4；老脚本只认 markdown 链接语法）',
   },
   {
-    // 规则 2 从「逐字符」改成「点得到对面」（第三轮：读 zhupi 源码发现
+    // 规则 2 从「逐字符」改成「点得到对面」（第三轮：读 menxia 源码发现
     // lang.js 只按文件名配对、从不读首行，逐字符匹配的立身理由是假的）。
     // **只登记「老的报、新的不报硬伤」这个方向** —— 新的多报仍算 bug，
     // 因为整条规则白名单化会让真正的「互链断了」溜过去。
     dir: 'old', match: (k) => k.startsWith('2:hard:'),
-    why: '规则2 改成「链接目标解析后指对文件」，分隔符/`./` 前缀降为警告（第三轮：zhupi 只按文件名配对，从不读首行；实测这条误报正拦着 #12）',
+    why: '规则2 改成「链接目标解析后指对文件」，分隔符/`./` 前缀降为警告（第三轮：menxia 只按文件名配对，从不读首行；实测这条误报正拦着 #12）',
   },
   {
     dir: 'new', match: (k) => k.startsWith('2:warn:'),
@@ -242,7 +242,7 @@ console.log('\n── 自验：故意造差异，确认它真报 ──');
   }
 }
 
-console.log('\n── 真实语料：奏折仓全部 open 折 ──');
+console.log('\n── 真实语料：敕草仓全部 open 折 ──');
 const branches = sh('gh', ['pr', 'list', '-R', 'charliezong18/review', '--state', 'open', '--json', 'number,headRefName',
   '--jq', '.[] | "\\(.number) \\(.headRefName)"'], root).out.trim().split('\n').filter(Boolean);
 check('拿到 open 折清单', branches.length > 0, `${branches.length} 个`);

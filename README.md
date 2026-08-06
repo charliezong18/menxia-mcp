@@ -1,12 +1,12 @@
 **English** · [中文](README.zh-CN.md)
 <div align="center">
 
-# zhupi-mcp
+# menxia-mcp
 
-**The agent-side of [the annotation desk (zhupi)](https://github.com/charliezong18/menxia), built as an MCP server.**<br>
-The annotation desk (zhupi) is where humans read long documents written by AI, highlight sentences, and leave comments. This repo is the other end of that loop: the set of tools used by the agent to submit a folder, read back comments, and reply to them one by one.
+**The agent-side of [the annotation desk (menxia)](https://github.com/charliezong18/menxia), built as an MCP server.**<br>
+The annotation desk (menxia) is where humans read long documents written by AI, highlight sentences, and leave comments. This repo is the other end of that loop: the set of tools used by the agent to submit a folder, read back comments, and reply to them one by one.
 
-[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [zhupi core](https://github.com/charliezong18/menxia)
+[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [menxia core](https://github.com/charliezong18/menxia)
 
 </div>
 
@@ -81,7 +81,7 @@ Seven, all live. merge is deliberately excluded — that is clicked by the human
 
 ![Loop overview](assets/loop.png)
 
-**The repo right in the middle is the entire interface.** Neither side calls the other; they each only talk to GitHub. So the annotation desk (zhupi) can be unhooked at any time, and this server can also be swapped back to bash scripts without the human side noticing at all.
+**The repo right in the middle is the entire interface.** Neither side calls the other; they each only talk to GitHub. So the annotation desk (menxia) can be unhooked at any time, and this server can also be swapped back to bash scripts without the human side noticing at all.
 
 Node + TypeScript, stdio transport, installed by absolute path — touching no global npm state. GitHub authentication directly borrows `gh auth token`, without separately managing a PAT.
 

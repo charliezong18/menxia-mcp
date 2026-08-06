@@ -1,16 +1,16 @@
 **English** · [中文](SPEC.zh-CN.md)
 
-# zhupi-mcp — The agent-side MCP server for the annotation desk (zhupi)
+# menxia-mcp — The agent-side MCP server for the annotation desk (menxia)
 
 Final Design · 2026-07-28
 
-Companion product: [`charliezong18/menxia`](https://github.com/charliezong18/menxia) (the annotation desk (zhupi), human side). This repo is the agent side.
+Companion product: [`charliezong18/menxia`](https://github.com/charliezong18/menxia) (the annotation desk (menxia), human side). This repo is the agent side.
 
 ---
 
 ## 1. Why we are doing this
 
-The agent side of the zhupi loop currently lives in `~/.claude/skills/review-loop/`: an 8KB SKILL.md plus four bash scripts. Hardened recently on 2026-07-28 — shifting house style from prose reminders to script gates. The trigger was measured data: "3 out of 8 folders missed return-to-session markers, 11 lacked bilingual pairs". The conclusion: **documentation reminders do not cure execution leaks**.
+The agent side of the menxia loop currently lives in `~/.claude/skills/review-loop/`: an 8KB SKILL.md plus four bash scripts. Hardened recently on 2026-07-28 — shifting house style from prose reminders to script gates. The trigger was measured data: "3 out of 8 folders missed return-to-session markers, 11 lacked bilingual pairs". The conclusion: **documentation reminders do not cure execution leaks**.
 
 This iteration solves the two things left unsolved from that time.
 
@@ -34,9 +34,9 @@ This iteration solves the two things left unsolved from that time.
 
 **Out of scope**:
 
-- **sealed (squash-merged) will not be a tool.** That is an action Charlie clicks on the annotation desk (zhupi); the agent side has no reason to hold this capability.
+- **sealed (squash-merged) will not be a tool.** That is an action Charlie clicks on the annotation desk (menxia); the agent side has no reason to hold this capability.
 - **Post-delivery ledger entry will not be a tool** (tracker numbers, STATUS.md in-flight tables) — those are scattered across different vault locations, belong to the skill's prose responsibilities, and are unfit to be hardcoded into schemas.
-- **No changes to the zhupi frontend.** This repo couples with `charliezong18/menxia` solely via GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
+- **No changes to the menxia frontend.** This repo couples with `charliezong18/menxia` solely via GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
 
 ---
 
@@ -69,7 +69,7 @@ track: {                       Folder tracking (review #61, approved 2026-07-31)
 }
 ```
 
-Returns: PR number, PR URL, deep link to the annotation desk (zhupi) `https://charliezong18.github.io/menxia/?pr=<n>`, lint report.
+Returns: PR number, PR URL, deep link to the annotation desk (menxia) `https://charliezong18.github.io/menxia/?pr=<n>`, lint report.
 
 **`track` (added 2026-07-31, review #61)**: applies three label families (`proj:` / `kind:` / `wait:`, vocabulary constants live **only** in `src/track.ts` — the rename lesson: cross-system contracts are bare strings, hard-code both ends and they fail silently; the reader recognizes prefixes only) and welds a trailing relation marker `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->` into the PR body, same family as `happy-session`. Label application is two-step: best-effort create missing labels with the vocabulary colors, then one `POST …/issues/{n}/labels` (which auto-creates any stragglers in default gray — verified against the real repo 2026-07-31). Label failures are warnings, never errors — the folder is already up; conflating the two makes callers re-submit.
 
@@ -81,7 +81,7 @@ Copy destination: `docs` land in `docs/<basename>`; `assets` land in `docs/asset
 
 Why it was added: D9 introduced this exemption, but **it had never once been usable** — it is a file inside the repo, while `open_folder` only copies `docs` to `docs/<basename>`, so no path could create or append to it. The third (cross-system) review recorded this as "the registry files are unreachable" and it was filed as theoretical; in practice #31 (the 22-chapter 官制史) spent its whole life reporting 22 false hard findings — and **a check that starts reporting false red is a check people learn to ignore**.
 
-(2026-07-30 amendment: The previous version said to unconditionally flatten to `docs/assets/<basename>`. The actual layout in the repo has subdirectories — `docs/assets/shots/annotate.png`, etc., and `docs/zhupi-readme.md` references exactly `assets/shots/setup.png`. zhupi resolves relative to the document's own directory (`render.js:27`); flattening would turn these references into broken images, and Rule 4 would blame the document, making people modify the text — meaning the same document would say different things in two folders.)
+(2026-07-30 amendment: The previous version said to unconditionally flatten to `docs/assets/<basename>`. The actual layout in the repo has subdirectories — `docs/assets/shots/annotate.png`, etc., and `docs/zhupi-readme.md` references exactly `assets/shots/setup.png`. menxia resolves relative to the document's own directory (`render.js:27`); flattening would turn these references into broken images, and Rule 4 would blame the document, making people modify the text — meaning the same document would say different things in two folders.)
 
 ![submit a folder workflow and its failure branches](assets/open-folder.png)
 
@@ -113,7 +113,7 @@ Returns: the house style gaps of each folder + return-to-session markers + draft
 
 Corollary: `PATCH /pulls/{n}` has no users left and is removed from the write allowlist — this server could only send two types of write requests: create folder, reply. (2026-07-31: folder tracking #61 added the two label routes — create label, apply labels — bringing the total to **four**. Still no PATCH/PUT/DELETE: removing/renaming labels is a disposal action, and disposal belongs to Charlie.)
 
-Marker checks examine the **value**, not the prefix: `<!-- happy-session: -->` and incorrectly formatted ids both fail to render the button on the zhupi side (`link.js:88`); checking only the prefix equals reporting a false green. The `grep -q 'happy-session:'` in the old script `audit-folders.sh:32` has exactly this flaw.
+Marker checks examine the **value**, not the prefix: `<!-- happy-session: -->` and incorrectly formatted ids both fail to render the button on the menxia side (`link.js:88`); checking only the prefix equals reporting a false green. The `grep -q 'happy-session:'` in the old script `audit-folders.sh:32` has exactly this flaw.
 
 ### 3.4 `list_folders` — list folders / "has he annotated it?"
 
@@ -150,7 +150,7 @@ commentId: number     Root inline comment id. **Required**
 body:      string
 ```
 
-Uses `POST /pulls/{n}/comments/{id}/replies`, appending to the comment thread instead of opening a new one. The `**回话**` prefix on the first line is welded on by the tool (hard convention ③), the caller does not need to write it themselves; if the first line is a block-level construct (fenced block / list / heading…), the prefix starts a new paragraph — zhupi passes the entire reply body through markdown-it (`cards.js:48`), being on the same line would read a code block as an inline code span.
+Uses `POST /pulls/{n}/comments/{id}/replies`, appending to the comment thread instead of opening a new one. The `**回话**` prefix on the first line is welded on by the tool (hard convention ③), the caller does not need to write it themselves; if the first line is a block-level construct (fenced block / list / heading…), the prefix starts a new paragraph — menxia passes the entire reply body through markdown-it (`cards.js:48`), being on the same line would read a code block as an inline code span.
 
 **~~Omitting `commentId` means sending a conversation comment~~ — this was deprecated on 2026-07-30 (during Phase 3 implementation).** Hard convention ① (`guard-reply-body.sh`) established at 10:54 that day forbids the agent from sending conversation comments to the conversation area: conversation comments sent by the agent look exactly the same as Charlie's in the API (shared account), turning into fake to-dos in `list_folders` that cannot be cleared — measured 7 out of 13 `needsReply` were the agent's own words, overreporting by 77%. The guard is newer than this section and has empirical data; follow the guard. Folder-level summaries **are spoken in the chat**, and metadata intended to be archived is written into the `docs/<slug>.md` body.
 
@@ -159,7 +159,7 @@ At the tool surface, **the capability to send a conversation comment does not ex
 Two additional items added in Phase 3 — **the three PreToolUse hooks are only attached to Claude Code's Bash tools, MCP calls bypass them**, so those gates must be reimplemented on this side; otherwise, the net effect of Phase 3 is "moving submit a folder to a new path with no gates":
 
 - **Sealed (squash-merged)/closed folders are outright rejected** (the `guard-closed-folder` rule). 2026-07-29 #23 empirical data: the agent replied as usual when the folder was already merged, all commands succeeded but the result was zero.
-- **If `commentId` is a reply, automatically swap it for its root**. It is unknown if GitHub normalizes this, and in case it doesn't, zhupi would treat it as an orphan and start a new card with no quote (`anchor.js:165`).
+- **If `commentId` is a reply, automatically swap it for its root**. It is unknown if GitHub normalizes this, and in case it doesn't, menxia would treat it as an orphan and start a new card with no quote (`anchor.js:165`).
 
 ---
 
@@ -209,7 +209,7 @@ Subprocesses running git **must have a timeout** (180 seconds, overridable via e
 
 Octokit, token fetched on the fly from `gh auth token`, without managing a separate PAT — `gh` is already authenticated on the machine, an extra PAT is just an extra source of expiration. On 401, refetch once and retry.
 
-(The zhupi frontend uses a fine-grained PAT because it runs in the browser where `gh` is unavailable. The two sides do not share credentials, nor should they.)
+(The menxia frontend uses a fine-grained PAT because it runs in the browser where `gh` is unavailable. The two sides do not share credentials, nor should they.)
 
 ### 4.4 Probing the "return-to-session" Marker
 
@@ -243,7 +243,7 @@ The original script's handling of this is: verify upon hit that "this pid is cur
 
 ## 5. Porting Acceptance Criterion
 
-The #1 risk during zhupi's own vanilla JS → Preact migration was "fixed things silently getting lost", so three rounds of item-by-item survival verification were conducted. The same applies to this rewrite.
+The #1 risk during menxia's own vanilla JS → Preact migration was "fixed things silently getting lost", so three rounds of item-by-item survival verification were conducted. The same applies to this rewrite.
 
 ### 5.1 Port based on implementation, not based on documentation
 
@@ -277,7 +277,7 @@ An incidental free benefit: pitfalls like macOS bash 3.2 lacking `mapfile` and a
 
 - **#1 Language direction: Check by ratio.** First strip fenced code blocks and inline code, then calculate the CJK character ratio of the remaining text — English versions >30% throw an error, Chinese versions <30% throw an error (which incidentally catches missing translations). Choosing ratios over "throw an error upon encountering paragraphs of Chinese" is because glossaries, proper nouns, and mixed CJK-English lines won't breach the threshold, largely dodging false positives; whereas flipping the entire piece backwards is guaranteed to be caught. **This is a tightening compared to the existing script**, and belongs under "deliberate improvements" in the differential test, see §5.2.
 
-- **#6 Missing 5-part items: Warn, do not block.** Meaning the code is correct, **it's the documentation that's wrong** — both line 5 of the SKILL.md house style table and the comment on line 27 of `open-folder.sh` wrote it as "block". Rationale: body paragraphs are meant for humans to read, missing them won't directly break zhupi's functionality like bilingual pairs do; and blocking too strictly pushes people to bypass the gate (the lesson from the pre-push incident). **This is not part of the porting work, but an outstanding documentation correction debt**, to be paid off together in §8 Phase 4.
+- **#6 Missing 5-part items: Warn, do not block.** Meaning the code is correct, **it's the documentation that's wrong** — both line 5 of the SKILL.md house style table and the comment on line 27 of `open-folder.sh` wrote it as "block". Rationale: body paragraphs are meant for humans to read, missing them won't directly break menxia's functionality like bilingual pairs do; and blocking too strictly pushes people to bypass the gate (the lesson from the pre-push incident). **This is not part of the porting work, but an outstanding documentation correction debt**, to be paid off together in §8 Phase 4.
 
 ---
 
@@ -352,14 +352,14 @@ Run a real-machine test at the end of each phase (genuinely submit a folder / ge
 | First line CRLF | Blocks | Lets through | Ditto, `trim()` consumes `\r` |
 | First line trailing spaces | Blocks | Lets through | Ditto |
 
-These three items **don't matter anymore** — round three of reading zhupi source code revealed the founding rationale for the reciprocal header rule was false (`lang.js` only pairs by filename and never reads the first line); the acceptance criterion has been changed to "the link target points to the correct file after resolution", and syntactic differences are uniformly downgraded to warnings.
+These three items **don't matter anymore** — round three of reading menxia source code revealed the founding rationale for the reciprocal header rule was false (`lang.js` only pairs by filename and never reads the first line); the acceptance criterion has been changed to "the link target points to the correct file after resolution", and syntactic differences are uniformly downgraded to warnings.
 
-**The three rules changed in round three (all misaligned with actual zhupi behavior):**
+**The three rules changed in round three (all misaligned with actual menxia behavior):**
 
 1. **Rule 2 changed from "character-by-character" to "can click to the other side", hard errors downgraded to warnings** (the syntactic difference part).
-   Empirical data showed it was blocking #12, whereas #12 rendered perfectly normal on the annotation desk (zhupi).
-2. **Rule 4 image references changed to resolve relative to the document's own directory**, consistent with `zhupi/src/render.js:26`.
-   The previous version unconditionally concatenated against `docs/` — images for subdirectory documents would **be reported present by lint, but display as broken in zhupi**, skewing towards false negatives.
+   Empirical data showed it was blocking #12, whereas #12 rendered perfectly normal on the annotation desk (menxia).
+2. **Rule 4 image references changed to resolve relative to the document's own directory**, consistent with `menxia/src/render.js:26`.
+   The previous version unconditionally concatenated against `docs/` — images for subdirectory documents would **be reported present by lint, but display as broken in menxia**, skewing towards false negatives.
 3. **Rule 1 adds `docs/.monolingual` to register exemptions.** After fixing the old script's false-pass bug, Rule 1 truly took effect for the first time, leading #31 (22 chapters of Chinese bureaucratic history) to be slapped with 22 hard errors — and no one is going to translate that into English.
 
 **Rule 5 empirical data** (all 27 bilingual pairs): False positive rate **0/27**, but discriminative power is also near 0 —
@@ -376,7 +376,7 @@ The write side equally applies §5.1 "Port based on implementation". Every item 
 | 3 | `--fix` promotes draft to ready | **Only reports, provides command** | REST does not support it, only GraphQL; opening `POST /graphql` equates to opening all mutations |
 | 4 | `guard-reply-body.sh` handles missing `**回话**` prefix by **rejecting** | **Weld shut** (auto-fill) | "Even if documented it can still be skipped, so weld it into the action itself" (the same rationale as §3.1). The tradeoff is that block-level constructs must be caught — if the first line is a fenced block / list, the prefix starts a new paragraph |
 | 5 | Images unconditionally land in `docs/assets/<basename>` | If `/assets/` is in the source path, **preserve the entire segment after it** | The actual layout in the repo is `docs/assets/shots/*.png`, flattening makes existing document references into broken images, and Rule 4 would blame the document |
-| 6 | Auditing `grep -q 'happy-session:'` | Checks the **value** of the marker | When the prefix is there but the value is non-compliant, zhupi cannot render the button; checking only the prefix reports a false green |
+| 6 | Auditing `grep -q 'happy-session:'` | Checks the **value** of the marker | When the prefix is there but the value is non-compliant, menxia cannot render the button; checking only the prefix reports a false green |
 | 7 | "Pick another slug" whenever the branch already exists | **Local existence / remote existence are addressed separately** | "Locally exists, remotely does not" has only one origin: previously crashed before push, at which point the remote is completely clean; the correct action is clearing and starting over, not bypassing |
 | 8 | `open-folder.sh` writes to `PARITY.md` ledger | **Does not write** | The new tool doesn't run the old bash lint, there is nothing to reconcile — D1's "10 consecutive times" counter froze as a result. **The criterion was replaced the same evening** (Charlie's call): every one of the nine rules must have a must-fail sample that the new implementation actually catches. Run `npm run retire-gate`; all nine were mutation-checked one by one and every one turned red. See [PARITY.md](PARITY.md) |
 | 9 | `SKIP_LINT=1` unconditional gate shutdown escape hatch | **None** | Undecided. This project remembers its own lesson that "blocking too strictly pushes people to bypass the gate", so lacking this opening is a known debt, not a design |

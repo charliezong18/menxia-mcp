@@ -50,7 +50,7 @@ describe('规则 1 · 双语对齐全（按 slug 双向）', () => {
   });
 });
 
-describe('规则 2 · 互链头「点得到对面」（第三轮评审后按 zhupi 真实行为改）', () => {
+describe('规则 2 · 互链头「点得到对面」（第三轮评审后按 menxia 真实行为改）', () => {
   it('对 → 过', () => expect(rules(snap())).not.toContain(2));
 
   it('**点不到对面 → 硬伤**（GitHub 原生页面上互链断了）', () => {
@@ -170,7 +170,7 @@ describe('规则 5 · 语言方向按比例（新增，警告）', () => {
 
   it('术语表/专名那种中英混排的英文版**不误报**', () => {
     const files = new Map([
-      ['docs/a.md', `${EN('a', '\n\nThe folder repo is 奏折仓 and an annotation is 朱批. Everything else is English prose that goes on for a while.')}`],
+      ['docs/a.md', `${EN('a', '\n\nThe folder repo is 敕草仓 and an annotation is 涂归. Everything else is English prose that goes on for a while.')}`],
       ['docs/a.zh-CN.md', ZH('a')],
     ]);
     expect(rules(snap({ files }))).not.toContain(5);

@@ -45,16 +45,16 @@ const ZH_HEAD = (slug: string) => `[English](${slug}.md) · **中文**`;
 /**
  * 首行里有没有一个**解析后指向兄弟文件**的链接。
  *
- * 为什么不再逐字符比（第三轮评审，读 zhupi 源码）：
- * 规则原本的立身理由是「zhupi 的语言切页按互链头认对子」—— **那是错的**。
- * `zhupi/src/lang.js:6` 只有一条 `/\.zh-CN\.md$/i`，注释自己写着
+ * 为什么不再逐字符比（第三轮评审，读 menxia 源码）：
+ * 规则原本的立身理由是「menxia 的语言切页按互链头认对子」—— **那是错的**。
+ * `menxia/src/lang.js:6` 只有一条 `/\.zh-CN\.md$/i`，注释自己写着
  * 「检测只认『同 basename + .zh-CN 后缀』这一条规则，不去猜正文语言」。
- * zhupi 从头到尾没读过首行。
+ * menxia 从头到尾没读过首行。
  *
  * 互链头的真实作用只剩一个：**在 GitHub 原生页面上互相点得到**。
  * 所以判据改成「点得到吗」，分隔符写 `·` 还是 `|`、路径带不带 `./` 一律不管 ——
  * 实测那正是 #12 被拦的全部原因，而它在门下上渲染完全正常。
- * （zhupi 的 `link.js` 解析相对链接时也会吃掉 `./`。）
+ * （menxia 的 `link.js` 解析相对链接时也会吃掉 `./`。）
  */
 function linksToSibling(firstLine: string, sibling: string): boolean {
   for (const m of firstLine.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
@@ -203,7 +203,7 @@ export function lint(snap: Snapshot): Finding[] {
 
     // ── 规则 3 / 2：互链头，含 .payload 例外 ──
     // .payload 登记的「待发正文」免英文版互链头（加了会把那行一起贴进对外 issue），
-    // 代价是它在 zhupi 里切不了语言，由中文版的横幅兜底。**这条只存在于代码里，SKILL.md 从没写过。**
+    // 代价是它在 menxia 里切不了语言，由中文版的横幅兜底。**这条只存在于代码里，SKILL.md 从没写过。**
     if (payload) {
       if (!zhBody.includes(PAYLOAD_BANNER)) {
         push(3, 'hard', base, `${base} 中文版缺「勿从本页复制」横幅（防止把涂归页的内容当成待发正文复制出去）`);
@@ -233,10 +233,10 @@ export function lint(snap: Snapshot): Finding[] {
   }
 
   // ── 规则 4：引用的图必须真在仓里（他读到断图栽过一次）──
-  // 引用相对**文档自身所在目录**解析，与 zhupi 一致
-  // （`zhupi/src/render.js:26` 注释写死「base 用 md 文件自身所在目录，不是写死的 docs/，
+  // 引用相对**文档自身所在目录**解析，与 menxia 一致
+  // （`menxia/src/render.js:26` 注释写死「base 用 md 文件自身所在目录，不是写死的 docs/，
   // 否则根目录或子目录的文档全解析错」）。
-  // 上一版一律按 `docs/` 拼，于是子目录文档的图 **lint 说在、zhupi 显示断图** ——
+  // 上一版一律按 `docs/` 拼，于是子目录文档的图 **lint 说在、menxia 显示断图** ——
   // 方向是漏报，正好是规则 4 唯一要防的那件事（第三轮评审）。
   const missing = new Set<string>();
   for (const f of snap.changed) {
@@ -290,7 +290,7 @@ function headCheck(
 const firstLine = (s: string): string => (s.split('\n')[0] ?? '').trim();
 const pct = (r: number): string => `${Math.round(r * 100)}%`;
 
-/** 折叠 `.` 与 `..`，与 zhupi `link.js` 的 normalize 同义。 */
+/** 折叠 `.` 与 `..`，与 menxia `link.js` 的 normalize 同义。 */
 function normalizePath(p: string): string {
   const out: string[] = [];
   for (const seg of p.split('/')) {

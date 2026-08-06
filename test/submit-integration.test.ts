@@ -7,11 +7,11 @@ import { join } from 'node:path';
 import { openFolder, replyComment, auditFolders } from '../src/submit.js';
 import { resetAuthCache } from '../src/github.js';
 
-// **整条写入链的集成测试**：假奏折仓（bare origin + clone）+ 本地 HTTP server 冒充 GitHub。
+// **整条写入链的集成测试**：假敕草仓（bare origin + clone）+ 本地 HTTP server 冒充 GitHub。
 //
 // 为什么必须有这一层：第二轮评审的唯一高危是「get() 零覆盖 —— 六条关键行为只活在
 // 那个函数里，而测试把它整个 mock 掉」。写入侧的关键行为（lint 不过就什么都不推、
-// 建折失败要说分支已推、已钦此的折拒回话、巡检一个非 GET 都不发）同样只活在编排里，
+// 建折失败要说分支已推、已画可的折拒回话、巡检一个非 GET 都不发）同样只活在编排里，
 // 单测各个零件全绿也证明不了它们。
 //
 // 这里的断言全部落在**真正发生的事**上：origin 上有没有那个分支、server 收到了什么请求。
@@ -39,7 +39,7 @@ const readBody = async (req: IncomingMessage): Promise<unknown> => {
 const ref = { owner: 'o', repo: 'r', slug: 'o/r' };
 /**
  * 会话 id 样本：形态取自实机探测，**值是合成的**（公开仓，别钉真 id 进历史）。
- * 短串（'s1' / 'sid-explicit'）过不了 zhupi 的 SESSION_ID，会被拒埋。
+ * 短串（'s1' / 'sid-explicit'）过不了 menxia 的 SESSION_ID，会被拒埋。
  */
 const SID = 'cmszzzzzzzzzzzzzzzzzzzzzz';
 /** 回话时 replyComment 会先 GET 这条批注看它是不是根。 */
@@ -96,7 +96,7 @@ beforeEach(() => {
   commentMeta = { in_reply_to_id: null };
 });
 
-/** 假奏折仓 + 一对过得了体例的文档。 */
+/** 假敕草仓 + 一对过得了体例的文档。 */
 function fixture(slug = 'demo-folder'): { repo: string; origin: string; docs: string[] } {
   const scratch = mkdtempSync(join(tmpdir(), 'zhupi-it-'));
   scratches.push(scratch);
@@ -131,12 +131,12 @@ const goodBody = {
 const writes = (): Seen[] => seen.filter((s) => s.method !== 'GET');
 
 describe('open_folder：整条链', () => {
-  it('推分支 → 建折 → 回读自核，全程 agent 不碰奏折仓', async () => {
+  it('推分支 → 建折 → 回读自核，全程 agent 不碰敕草仓', async () => {
     const { origin, docs } = fixture();
     const out = await openFolder({ title: '读物：demo', body: goodBody, docs }, ref);
 
     expect(out.pr).toBe(42);
-    // 主输出是朱批台深链（2026-07-27：给 GitHub 链接会被读成「让你发朱批你却发了个 PR」）
+    // 主输出是门下深链（2026-07-27：给 GitHub 链接会被读成「让你发涂归你却发了个 PR」）
     expect(out.desk).toBe('https://charliezong18.github.io/menxia/?pr=42');
     // 不带 track 恒有且只有这一条警告（#61：新折别裸奔）。用全等锁死 ——
     // 免得将来别的警告躲进「track 缺省」这条的影子里溜过去。
@@ -149,7 +149,7 @@ describe('open_folder：整条链', () => {
     const payload = created.body as { head: string; base: string; body: string; draft?: unknown };
     expect(payload.head).toBe('demo-folder');
     expect(payload.base).toBe('main');
-    // 2026-07-26 起弃用 draft：私有单人仓里 draft 挡不住任何人，却挡住「钦此」的 squash merge
+    // 2026-07-26 起弃用 draft：私有单人仓里 draft 挡不住任何人，却挡住「画可」的 squash merge
     expect(payload.draft).toBeUndefined();
     expect(payload.body).toContain('## 待你拍板');
     expect(payload.body).toMatch(/<!-- happy-session: .+ -->/);
@@ -209,7 +209,7 @@ describe('reply_comment', () => {
 
   // 2026-07-29 #23：他说「批完了」时折已 merged，agent 照常回话，
   // **命令全部成功而结果是零**。guard-closed-folder.sh 拦的是 Bash，MCP 调用从旁边过去。
-  it('已钦此的折 —— 拒，且一个写请求都没发', async () => {
+  it('已画可的折 —— 拒，且一个写请求都没发', async () => {
     prState = { state: 'closed', merged_at: '2026-07-29T00:00:00Z' };
     await expect(replyComment({ pr: 32, commentId: 1, body: 'x' }, ref)).rejects.toThrow(/画可/);
     expect(writes()).toEqual([]);
@@ -247,7 +247,7 @@ describe('audit_folders：纯只读', () => {
 
 // ── 三轮评审（2026-07-30）之后补的 ──
 
-describe('回复的回复要归位到串首（第三轮：zhupi 会把孤儿另起一张卡）', () => {
+describe('回复的回复要归位到串首（第三轮：menxia 会把孤儿另起一张卡）', () => {
   it('commentId 是一条 reply —— 换成它的根再发', async () => {
     commentMeta = { in_reply_to_id: 555 };
     await replyComment({ pr: 12, commentId: 999, body: '采纳' }, ref);
@@ -265,7 +265,7 @@ describe('回复的回复要归位到串首（第三轮：zhupi 会把孤儿另�
 });
 
 describe('巡检查的是标记的**值**，不是前缀（第三轮）', () => {
-  it('标记在但 id 朱批台认不出来 —— 报出来，不算合体例', async () => {
+  it('标记在但 id 门下认不出来 —— 报出来，不算合体例', async () => {
     fixture('audit-badmarker');
     openList = [{ number: 9, title: 'x', body: '<!-- happy-session: nope -->', draft: false, head: { ref: 'main' } }];
     const out = await auditFolders(ref);

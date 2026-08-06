@@ -1,9 +1,9 @@
 **English** · [中文](requirements.zh-CN.md)
 
-# zhupi-mcp Phase 1 requirements — read-only tools
+# menxia-mcp Phase 1 requirements — read-only tools
 
 > First of three stages (requirements → design → tasks). This document answers only **what counts as correct**, never how to build it — technology choices, module boundaries, and data flow all belong to the design stage.
-> Background in [SPEC](https://github.com/charliezong18/zhupi-mcp/blob/main/SPEC.md); phase exit criteria in [MILESTONES](https://github.com/charliezong18/zhupi-mcp/blob/main/MILESTONES.md).
+> Background in [SPEC](https://github.com/charliezong18/menxia-mcp/blob/main/SPEC.md); phase exit criteria in [MILESTONES](https://github.com/charliezong18/menxia-mcp/blob/main/MILESTONES.md).
 
 ## The pain this phase addresses
 

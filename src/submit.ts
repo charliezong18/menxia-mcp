@@ -26,7 +26,7 @@ import { hasHard, lint, type Finding } from './lint.js';
 import { readAll, isFolderError } from './folders.js';
 import { buildRelMarker, labelColor, labelDesc, labelsFor, trackAudit, type TrackFolderState, type TrackInput } from './track.js';
 
-// 2026-07-31 仓与 Pages 由 zhupi 改名 menxia。旧址 /zhupi/ 现在是一个只做转发的壳仓，
+// 2026-07-31 仓与 Pages 由 menxia 改名 menxia。旧址 /zhupi/ 现在是一个只做转发的壳仓，
 // 原样带走 query 与 hash，所以历史折 body 里的 directLink 仍然点得开。新折一律发新址。
 export const deskUrl = (pr: number): string => `https://charliezong18.github.io/menxia/?pr=${pr}`;
 
@@ -212,7 +212,7 @@ export const REPLY_PREFIX = '**回话**';
 /**
  * 首行（连带第二行）会不会让 `**回话** ` 前缀毁掉块级渲染。
  *
- * 第三轮跨系统评审 2026-07-30 抓到：zhupi 把 reply 正文整个过 markdown-it
+ * 第三轮跨系统评审 2026-07-30 抓到：menxia 把 reply 正文整个过 markdown-it
  * （`cards.js:48` `renderMarkdown(r.body)`，`render.js:2` `markdownit({ html: false, … })`），
  * 所以 `**回话** ` + 一行围栏会被读成**行内 code span** —— 代码块整段糊成一段话。
  * 老守卫的做法是**拒绝**（让 agent 自己改写），方向是安全的；焊死的做法必须自己处理这一类。
@@ -293,7 +293,7 @@ export async function replyComment(input: ReplyInput, ref: RepoRef = reviewRepo(
 
   // **回复的回复要归位到根。** 第三轮评审留了个 NEEDS VERIFICATION：
   // `comment_id` 传一条 reply 的 id 时 GitHub 会不会归一化到串首，仓里 18 条回话
-  // 全都指向根，数据答不了。而万一它不归一化，zhupi 会把这条当**孤儿另起一张卡**
+  // 全都指向根，数据答不了。而万一它不归一化，menxia 会把这条当**孤儿另起一张卡**
   // （`anchor.js:165` 找不到 in_reply_to_id 对应的根就 `roots.push(orphan)`）——
   // 也就是一条没有引文、飘在外面的批注。不去赌，自己先查一次：非根就换成根。
   let commentId = input.commentId;
@@ -412,7 +412,7 @@ export async function auditFolders(ref: RepoRef = reviewRepo()): Promise<{ repo:
     const problems: string[] = [];
     // **查值，不是查前缀。** 老脚本 `audit-folders.sh:32` 是 `grep -q 'happy-session:'`，
     // 于是 `<!-- happy-session: -->` 和一个格式不对的 id 都算「合体例」，
-    // 而门下上那个按钮根本不会出现（zhupi `link.js:88` 过不了 SESSION_ID 就返回 null）。
+    // 而门下上那个按钮根本不会出现（menxia `link.js:88` 过不了 SESSION_ID 就返回 null）。
     // 巡检存在的全部意义是查出这类漏执行，报个假绿等于没跑（第三轮评审）。
     const marked = MARKER_RE.exec(p.body ?? '')?.[1];
     if (!marked) {

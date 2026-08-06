@@ -12,7 +12,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const git = (cwd: string, args: string[]): string =>
   execFileSync('git', ['-c', 'core.quotePath=false', ...args], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trimEnd();
 
-/** 造一个假奏折仓：bare 当 origin，clone 当本地 checkout，main 上有一篇旧文档。 */
+/** 造一个假敕草仓：bare 当 origin，clone 当本地 checkout，main 上有一篇旧文档。 */
 function fakeReviewRepo(): { repo: string; origin: string; scratch: string } {
   const scratch = mkdtempSync(join(tmpdir(), 'zhupi-test-'));
   const origin = join(scratch, 'origin.git');

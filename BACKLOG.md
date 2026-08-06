@@ -14,7 +14,7 @@ Things that are thought through but not scheduled.
 
 **How**: `docs[]` already takes a list, so the plumbing exists; what is missing is the lint rule — pair-matching currently derives one slug and would need to group by slug instead. `folder-lint.sh` already groups by slug (it strips `.zh-CN` and dedupes), so the logic is portable rather than new.
 
-**Undecided**: whether zhupi's reading UI handles a multi-document PR well enough for this to be worth it. Check before building — this is a frontend question, not a server one.
+**Undecided**: whether menxia's reading UI handles a multi-document PR well enough for this to be worth it. Check before building — this is a frontend question, not a server one.
 
 ## B2 · Feed bilingual gaps straight to a translator
 
@@ -64,7 +64,7 @@ Things that are thought through but not scheduled.
 
 **How**: out of scope for an MCP server — a server only speaks when spoken to. This belongs in a GitHub Action or the existing ntfy setup. Recorded here because it is the natural next thought after `list_folders` and should be pointed elsewhere rather than re-litigated.
 
-**Undecided**: whether zhupi's own BACKLOG F10 (push one line when a document arrives) already covers the mirror image of this, in which case both live there.
+**Undecided**: whether menxia's own BACKLOG F10 (push one line when a document arrives) already covers the mirror image of this, in which case both live there.
 
 ## Paginate the merged listing (noted 2026-07-30; will bite around mid-August 2026)
 
@@ -119,9 +119,9 @@ changes how submission feels to him.
 |---|---|
 | Did anyone actually go around it | **0/18** — every open folder carries the return-to-session marker, i.e. all went the proper route. Those 6 bypass routes are reasoned, not observed |
 | How much house style actually drifted | 17/18 clean, and the single hit was a **false positive** (#31 should have had the monolingual exemption) |
-| Does the annotation desk show check status | **No.** Across zhupi's 23 source files, `check_run` / `checkSuite` / `statuses` / `mergeable_state` all return zero hits |
+| Does the annotation desk show check status | **No.** Across menxia's 23 source files, `check_run` / `checkSuite` / `statuses` / `mergeable_state` all return zero hits |
 
-The third is decisive: a required check would **light up red where he cannot see it, then block the one button he cares about (钦此)** — invisible signal plus blocking action. Advisory would just be a red X nobody reads.
+The third is decisive: a required check would **light up red where he cannot see it, then block the one button he cares about (画可)** — invisible signal plus blocking action. Advisory would just be a red X nobody reads.
 
 **And that single red exposed a different, real debt**: the `docs/.monolingual` exemption had never once been usable (a file inside the repo, and `open_folder` had no path that could create it), so #31 reported 22 false hard findings for its whole life. **A check that starts reporting false red is a check people learn to ignore** — that is killing this gate more concretely than any bypass. Fixed (`open_folder`'s `monolingual` flag, plus a one-off registration for #31); the sweep is now 19/19 clean.
 

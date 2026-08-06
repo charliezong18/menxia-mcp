@@ -6,7 +6,7 @@ import { resetAuthCache } from '../src/github.js';
 /**
  * 会话 id 样本。**形态**取自实机探测（25 位小写字母数字），**值是合成的** ——
  * 本仓是公开的，没有理由把一个真会话的标识符钉进 git 历史。
- * 'sid123' 那种短串过不了 zhupi 的 SESSION_ID（`link.js:80` 要 16–40 位）。
+ * 'sid123' 那种短串过不了 menxia 的 SESSION_ID（`link.js:80` 要 16–40 位）。
  */
 const SID = 'cmszzzzzzzzzzzzzzzzzzzzzz';
 
@@ -140,9 +140,9 @@ describe('回读自核', () => {
 
 // ── 三轮评审（2026-07-30）之后补的 ──
 
-describe('标记格式必须与 zhupi 认的一致（第三轮：跨系统）', () => {
-  // zhupi `link.js:80` 是 `/^[a-z0-9]{16,40}$/i`。上一版这边是
-  // `[A-Za-z0-9_-]+` —— 允许连字符和任意长度，比 zhupi 松。
+describe('标记格式必须与 menxia 认的一致（第三轮：跨系统）', () => {
+  // menxia `link.js:80` 是 `/^[a-z0-9]{16,40}$/i`。上一版这边是
+  // `[A-Za-z0-9_-]+` —— 允许连字符和任意长度，比 menxia 松。
   it('带连字符的 UUID —— 不埋，且明说按钮不会出现', () => {
     const { text, warnings } = buildBody(full, '4a8b1c2d-3e4f-5a6b-7c8d-9e0f1a2b3c4d');
     expect(text).not.toContain('happy-session');
@@ -157,7 +157,7 @@ describe('标记格式必须与 zhupi 认的一致（第三轮：跨系统）', 
     expect(buildBody(full, 'cmszzzzzzzzzzzzzzzzzzzzzz').text).toContain('<!-- happy-session: cmszzzzzzzzzzzzzzzzzzzzzz -->');
   });
 
-  it('MARKER_RE 提取与 zhupi 的第一步一致（吃得到整条 URL 那条通道）', () => {
+  it('MARKER_RE 提取与 menxia 的第一步一致（吃得到整条 URL 那条通道）', () => {
     const url = 'https://my.happy.example/session/abc';
     expect(MARKER_RE.exec(`<!-- happy-session: ${url} -->`)?.[1]).toBe(url);
     expect(SESSION_ID_RE.test('cmszzzzzzzzzzzzzzzzzzzzzz')).toBe(true);

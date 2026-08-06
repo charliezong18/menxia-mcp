@@ -138,7 +138,7 @@ The lock file is placed outside the repo (`~/.zhupi-mcp/review.lock`). The reaso
 
 String together T3/T4/T5, plus PARITY ledger writing — **the landing point of the ledger is after the PR is built**, not after lint (the conclusion of the old script's first round of review: rejected folders and retries are not "one submit a folder", empirically 2 folders and 0 real PRs can accumulate 6 lines). The abort path records "submit a folder aborted (not counted)".
 
-Returns: PR number, **the annotation desk (zhupi) deep link**, lint report. **Do not use the github.com PR link as the primary output** (stepped on this 2026-07-27: he will read it as "asked you to send the annotation desk (zhupi) but you sent a PR").
+Returns: PR number, **the annotation desk (menxia) deep link**, lint report. **Do not use the github.com PR link as the primary output** (stepped on this 2026-07-27: he will read it as "asked you to send the annotation desk (menxia) but you sent a PR").
 
 **Acceptance criterion**: ① Runs end-to-end successfully on a fake folder repo, `PARITY.md` gains exactly one row with a real folder number;
 ② When lint fails, the ledger records "submit a folder aborted" and **does not enter the continuous count** (assert the streak remains unchanged using `summarize()`).
@@ -147,7 +147,7 @@ Returns: PR number, **the annotation desk (zhupi) deep link**, lint report. **Do
 
 The landing of C3. `commentId` is **required**, the conversation comment path is not implemented.
 
-The `**回话**` prefix (hard convention ③) is **welded into the tool**: if the first line lacks it, automatically append it, do not reject. The rationale is the established philosophy of this project — "what is written in documentation can still be skipped, so weld it into the action itself" (SPEC §3.1); and empirical data supports it: 0 out of 12 replies across the repo carry the prefix, prose cannot govern it, the guard changed it to rejection, the tool side can do it more thoroughly. **Same line, do not leave blank lines** (the annotation desk (zhupi) already has a `reply · <login>` label, a bolded "reply" occupying its own line is a three-layer repetition in the 300px wide annotation column).
+The `**回话**` prefix (hard convention ③) is **welded into the tool**: if the first line lacks it, automatically append it, do not reject. The rationale is the established philosophy of this project — "what is written in documentation can still be skipped, so weld it into the action itself" (SPEC §3.1); and empirical data supports it: 0 out of 12 replies across the repo carry the prefix, prose cannot govern it, the guard changed it to rejection, the tool side can do it more thoroughly. **Same line, do not leave blank lines** (the annotation desk (menxia) already has a `reply · <login>` label, a bolded "reply" occupying its own line is a three-layer repetition in the 300px wide annotation column).
 
 **Acceptance criterion**: ① No prefix on the first line → append it and on the **same line**; ② First line already has it → do not append repeatedly;
 ③ Omitting `commentId` → report an executable error pointing to "summarize in chat", instead of silently emitting a conversation comment.
@@ -177,13 +177,13 @@ Two real sessions submit a folder **simultaneously**. Must **see flock take effe
 
 **dogfood**: The first folder submitted using `open_folder` is Phase 3's own delivery document.
 
-**Acceptance criterion**: ① The real PR is built, the annotation desk (zhupi) deep link can be opened;
+**Acceptance criterion**: ① The real PR is built, the annotation desk (menxia) deep link can be opened;
 ② **The tag is verified by reading back from the online PR body** (not just considered done after local assembly);
 ③ The agent never touches `~/Developer/review` throughout the entire process.
 
 ## T12 · Three rounds of review + documentation debt
 
-Shift perspectives for three rounds, **at least one round looking outside the repo** (Phase 2's third round read the zhupi source code, unearthing three misalignments between the rules and the product's actual behavior — that round was the most valuable).
+Shift perspectives for three rounds, **at least one round looking outside the repo** (Phase 2's third round read the menxia source code, unearthing three misalignments between the rules and the product's actual behavior — that round was the most valuable).
 
 Documentation: SPEC §3.6 amends conversation comment (C3) · §5.4 registers three deliberate improvements (lint location / `--fix` not supplementing tag / reply prefix welded shut) · MILESTONES append a line (never rewrite old entries) · README tool surface supplement three items · `PARITY.md` log a note for T0.
 

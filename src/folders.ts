@@ -120,7 +120,7 @@ async function hydrate(ref: RepoRef, pull: RawPull, store: ProcessedStore): Prom
   ]);
 
   const inline = buildInlineThreads(comments, reviews, pull.head.sha);
-  // 把 zhupi 降级塞进 review body 的涂归一并捞出来——否则那批话在输出里根本不存在。
+  // 把 menxia 降级塞进 review body 的涂归一并捞出来——否则那批话在输出里根本不存在。
   // 第三个参数是本地「已处理」记录：判的 answered 不再靠位置推断（review#29）。
   const deskNotes = deskFallbackNotes(reviews);
   const entries = conversationEntriesOf([...issueComments, ...deskNotes]);

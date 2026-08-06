@@ -37,6 +37,6 @@ async function main(): Promise<void> {
 // 于是 main() 不执行、进程零 handler 立刻 exit 0，客户端只看到「起来就断」且没有一个字的诊断。
 // 评审用 symlink 实证过。这个文件本来就只有一个用途，没有被 import 的场景，无条件跑最稳。
 main().catch((e: unknown) => {
-  process.stderr.write(`zhupi-mcp 起不来：${String((e as Error)?.message ?? e)}\n`);
+  process.stderr.write(`menxia-mcp 起不来：${String((e as Error)?.message ?? e)}\n`);
   process.exit(1);
 });

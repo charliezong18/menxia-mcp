@@ -2,7 +2,7 @@
 
 # Phase 2 任务拆分
 
-> 上游：[需求](https://github.com/charliezong18/review/pull/32)（已钦此）· [设计 v3](https://github.com/charliezong18/review/pull/33)（D5/D7/D8 已定）
+> 上游：[需求](https://github.com/charliezong18/review/pull/32)（已画可）· [设计 v3](https://github.com/charliezong18/review/pull/33)（D5/D7/D8 已定）
 > **一条一条执行**，每条做完先过判据再动下一条。
 
 ## 依赖顺序
