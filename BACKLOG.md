@@ -143,3 +143,11 @@ This is the same root as the `.monolingual` debt above: **a writable file shared
 **Undecided**: which tier. Fragments are a purely mechanical change that preserves today's lint structure and do eliminate the collisions outright — but they can't fix the dangling entries that come from keeping registration separate from the document. The in-document marker solves both at once, at the cost of changing lint's read path. Leaning towards the latter.
 
 **Meets the scheduling rule**: this came out of a real folder submission, not from speculation.
+
+## B8 · Legacy-word gate: first push of any new branch is a guaranteed false positive (hit for real 2026-08-08)
+
+**What**: on a new branch's first push (remote sha all zeros) the pre-push hook cannot compute an increment and, per "only fail toward stricter", degrades to scanning the whole tree at HEAD — inevitably hitting two old files outside the exclusion list: `docs/phase-1/tasks.zh-CN.md` (cites protocol constants) and `retired/SKILL.md.orig` (an archived snapshot). Net effect: every new branch needs the `--no-verify` escape, which both neuters the gate and trains the bypass reflex.
+
+**Why**: 签 v1 (review #116) hit this pushing `feat/qian-tags`. The added lines themselves were clean (legacy-word scan: 0); everything blocked was pre-existing history.
+
+**How**: pick one. ① Cheapest: add those two files to `LEGACY_SKIP` (same rationale as the existing exclusions — one cites protocol constants, one is an archive); ② root fix: change the whole-tree fallback to scan only the commits being pushed (`git rev-list <lsha> --not --remotes` or similar), with its own self-test. Per house rules, run the hook's self-tests before touching it.
