@@ -24,7 +24,7 @@ import { stageFolder, type Staged } from './worktree.js';
 import { collect } from './snapshot.js';
 import { hasHard, lint, type Finding } from './lint.js';
 import { readAll, isFolderError } from './folders.js';
-import { buildRelMarker, labelColor, labelDesc, labelsFor, trackAudit, type TrackFolderState, type TrackInput } from './track.js';
+import { buildRelMarker, labelColor, labelDesc, labelsFor, trackAudit, unknownQian, type TrackFolderState, type TrackInput } from './track.js';
 
 // 2026-07-31 仓与 Pages 由 menxia 改名 menxia。旧址 /zhupi/ 现在是一个只做转发的壳仓，
 // 原样带走 query 与 hash，所以历史折 body 里的 directLink 仍然点得开。新折一律发新址。
@@ -54,7 +54,7 @@ export interface OpenFolderInput {
    */
   monolingual?: boolean;
   /**
-   * 折务追踪（#61）：proj/kind/wait 三类 label + 折间关系标记。
+   * 折务追踪（#61；签 = #116）：proj/kind/wait/签 四类 label + 折间关系标记。
    * 到这里的已经是 tools 层校验过的 —— 缺省不拦，只出 warning（新折别裸奔）。
    */
   track?: TrackInput;
@@ -140,7 +140,7 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
   const warnings = [...built.warnings];
   if (staged.fetchFailed) warnings.push('fetch origin 失败 —— 分支基点可能落后于最新 main');
   if (input.track) {
-    warnings.push(...(await applyTrackLabels(ref, pr.number, labelsFor(input.track))));
+    warnings.push(...(await applyTrackLabels(ref, pr.number, labelsFor(input.track), input.track.qian)));
   } else {
     warnings.push('本折没带 track（proj/kind/wait）—— 门下分组会把它落到「未标注」，词表与规矩见 review #61');
   }
@@ -159,22 +159,29 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
 }
 
 /**
- * 贴折务追踪的 label（#61）。**折已经建好才走到这里**，所以任何失败都只能是 warning ——
- * 贴不上 ≠ 折没呈上，把两件事说成一件会引人重开一折（与 verifyMarker 同一个理由）。
+ * 贴折务追踪的 label（#61；签 = review #116）。**折已经建好才走到这里**，所以任何失败都只能是
+ * warning —— 贴不上 ≠ 折没呈上，把两件事说成一件会引人重开一折（与 verifyMarker 同一个理由）。
  *
  * 两步：
  *   1. 补建缺的 label —— 按词表定色（track.ts 单点）。**尽力而为**：这步失败的代价
  *      只是颜色落默认灰（下一步会自动建缺的，2026-07-31 对真仓实测），所以吞掉不报。
  *   2. 一次性贴上 —— 这步才是硬的，失败要报出补救命令。
+ *
+ * 顺带：签是开放集，**新签**（既不在初始七签、也不是仓里已有的 `签:*` label）照建照贴，
+ * 但出一条 warning —— 与 track 缺失只警告不阻断同一个哲学。判据吃的是这里已经拉到的
+ * 现有 label 清单；清单拉不到就退化成只对种子七签放行。
  */
-async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[]): Promise<string[]> {
+async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[], qian: string[] = []): Promise<string[]> {
+  const warnings: string[] = [];
+  let existingNames: string[] = [];
   try {
     const existing = await get<Array<{ name: string }>>(
       'GET /repos/{owner}/{repo}/labels',
       { owner: ref.owner, repo: ref.repo, per_page: 100 },
       { pageGuard: { kind: 'unknown', detail: 'label 超过 100 个 —— 词表不该长这么大，先去清理' } },
     );
-    const have = new Set(existing.map((l) => l.name));
+    existingNames = existing.map((l) => l.name);
+    const have = new Set(existingNames);
     for (const name of labels.filter((n) => !have.has(n))) {
       try {
         await write('POST /repos/{owner}/{repo}/labels', {
@@ -189,7 +196,10 @@ async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[]
       }
     }
   } catch {
-    // 读不到现有 label 清单：直接靠第 2 步的自动建。
+    // 读不到现有 label 清单：直接靠第 2 步的自动建；新签判据退化成只认种子七签。
+  }
+  for (const q of unknownQian(qian, existingNames)) {
+    warnings.push(`新签「${q}」不在现有签集 —— 确认不是想打别的签（照建照贴了）`);
   }
   try {
     await write('POST /repos/{owner}/{repo}/issues/{issue_number}/labels', {
@@ -198,10 +208,11 @@ async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[]
       issue_number: prNumber,
       labels,
     });
-    return [];
+    return warnings;
   } catch (e) {
     const cmd = labels.map((l) => `--add-label ${JSON.stringify(l)}`).join(' ');
-    return [`track 的 label 没贴上（折本身已建好）：${String((e as Error)?.message ?? e)}。补：gh pr edit ${prNumber} -R ${ref.slug} ${cmd}`];
+    warnings.push(`track 的 label 没贴上（折本身已建好）：${String((e as Error)?.message ?? e)}。补：gh pr edit ${prNumber} -R ${ref.slug} ${cmd}`);
+    return warnings;
   }
 }
 

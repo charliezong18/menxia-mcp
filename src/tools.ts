@@ -158,7 +158,7 @@ export const TOOLS = [
         track: {
           type: 'object',
           description:
-            '折务追踪（review #61）：贴 proj/kind/wait 三类 label + 焊折间关系标记。' +
+            '折务追踪（review #61；签 = #116）：贴 proj/kind/wait/签 四类 label + 焊折间关系标记。' +
             '**新折都该带**——不带只警告，但门下分组会把它落到「未标注」',
           properties: {
             proj: {
@@ -171,6 +171,14 @@ export const TOOLS = [
               type: 'string',
               enum: [...WAIT_VALUES],
               description: '等谁。不给按规则推：有「待你拍板」段→你拍；读物→闲；其余→你读',
+            },
+            qian: {
+              type: 'array',
+              items: { type: 'string' },
+              description:
+                '签＝主题归堆（跨项目、跨状态同架），如 ["旅行","开发"]；一折可多签。' +
+                '初始签集：旅行/开发/身份/工作/健康/钱/文史。**开放集**：新签照建照贴，' +
+                '只在既不在初始七签、也不是仓里已有 签: label 时出一条 warning（不阻断）',
             },
             needs: { type: 'array', items: { type: 'integer' }, description: '本折依赖哪些折的结论' },
             supersedes: {
@@ -491,10 +499,10 @@ export async function handleTool(
     let track: TrackInput | undefined;
     if (args.track !== undefined) {
       if (typeof args.track !== 'object' || args.track === null || Array.isArray(args.track)) {
-        throw new ZhupiFailure({ kind: 'badInput', what: 'track 得是对象：{ proj, kind, wait?, needs?, supersedes?, unblocks? }' });
+        throw new ZhupiFailure({ kind: 'badInput', what: 'track 得是对象：{ proj, kind, wait?, qian?, needs?, supersedes?, unblocks? }' });
       }
       rejectUnknownKeys('open_folder 的 track', args.track as Record<string, unknown>, [
-        'proj', 'kind', 'wait', 'needs', 'supersedes', 'unblocks',
+        'proj', 'kind', 'wait', 'qian', 'needs', 'supersedes', 'unblocks',
       ]);
       track = validateTrack(args.track as Record<string, unknown>, args.body as FolderBody);
     }

@@ -11,9 +11,14 @@ import { ZhupiFailure } from './errors.js';
 export const PROJ_PREFIX = 'proj:';
 export const KIND_PREFIX = 'kind:';
 export const WAIT_PREFIX = 'wait:';
+export const QIAN_PREFIX = '签:';
 
 export const KIND_VALUES = ['拍板', '评审', '设计', '读物', '交付', '参考'] as const;
 export const WAIT_VALUES = ['你拍', '你读', 'agent', '闲'] as const;
+// 签 = 主题归堆（跨项目、跨状态同架）。**初始集不是枚举**：proj/kind/wait 三类值是封闭的，
+// 签是开放的 —— 新签照建照贴，只在既不在初始七签、也不在仓里已有 签: label 时出 warning
+// （unknownQian）。这七个是种子，防手滑打错字，不是白名单。
+export const QIAN_VALUES = ['旅行', '开发', '身份', '工作', '健康', '钱', '文史'] as const;
 export type Kind = (typeof KIND_VALUES)[number];
 export type Wait = (typeof WAIT_VALUES)[number];
 
@@ -34,24 +39,37 @@ export const LABEL_COLORS: Readonly<Record<string, string>> = {
   'wait:你读': 'FBCA04',
   'wait:agent': '0075CA',
   'wait:闲': 'EDEDED',
+  // 签家族统一一个紫（区分靠字，与 kind 全走一个淡蓝同理）。种子七签列在这里；
+  // 开放集里的新签靠下面 labelColor 的前缀兜底也落这个紫，全家族一个颜色。
+  '签:旅行': '5319E7',
+  '签:开发': '5319E7',
+  '签:身份': '5319E7',
+  '签:工作': '5319E7',
+  '签:健康': '5319E7',
+  '签:钱': '5319E7',
+  '签:文史': '5319E7',
 };
 export const DEFAULT_PROJ_COLOR = 'BFD4F2';
+export const QIAN_COLOR = '5319E7';
 
 export const labelColor = (name: string): string =>
-  LABEL_COLORS[name] ?? (name.startsWith(PROJ_PREFIX) ? DEFAULT_PROJ_COLOR : 'EDEDED');
+  LABEL_COLORS[name] ??
+  (name.startsWith(PROJ_PREFIX) ? DEFAULT_PROJ_COLOR : name.startsWith(QIAN_PREFIX) ? QIAN_COLOR : 'EDEDED');
 
 export const labelDesc = (name: string): string => {
   if (name.startsWith(PROJ_PREFIX)) return `项目：${name.slice(PROJ_PREFIX.length)}`;
   if (name.startsWith(KIND_PREFIX)) return `主用途：${name.slice(KIND_PREFIX.length)}`;
   if (name.startsWith(WAIT_PREFIX)) return `等：${name.slice(WAIT_PREFIX.length)}`;
+  if (name.startsWith(QIAN_PREFIX)) return `签：${name.slice(QIAN_PREFIX.length)}（主题归堆）`;
   return '';
 };
 
-/** 校验后的 track。proj 恒为数组（≥1），wait 恒有值（缺省时按规则推出来）。 */
+/** 校验后的 track。proj 恒为数组（≥1），wait 恒有值（缺省时按规则推出来），qian 恒为数组（可空）。 */
 export interface TrackInput {
   proj: string[];
   kind: Kind;
   wait: Wait;
+  qian: string[];
   needs: number[];
   supersedes: number[];
   unblocks?: string;
@@ -71,6 +89,21 @@ const intList = (raw: unknown, field: string): number[] => {
     throw new ZhupiFailure({ kind: 'badInput', what: `track.${field} 得是正整数折号（≤ 1000000），收到 ${JSON.stringify(bad)}` });
   }
   return [...new Set(raw as number[])];
+};
+
+// 签值是**开放集**：不校验取值（没有白名单），只 trim、去空、去重。string 归一成单元素数组，
+// 与 proj 同一个入参形状。非 string 元素直接拒 —— 与 proj 拒非法元素同一个理由（裸字符串契约）。
+const qianList = (raw: unknown): string[] => {
+  if (raw === undefined || raw === null) return [];
+  const list = typeof raw === 'string' ? [raw] : raw;
+  if (!Array.isArray(list)) {
+    throw new ZhupiFailure({ kind: 'badInput', what: `track.qian 得是签名（string 或 string[]），收到 ${JSON.stringify(raw)}` });
+  }
+  const bad = list.filter((x) => typeof x !== 'string');
+  if (bad.length > 0) {
+    throw new ZhupiFailure({ kind: 'badInput', what: `track.qian 的每一项都得是字符串，收到 ${JSON.stringify(bad)}` });
+  }
+  return [...new Set((list as string[]).map((s) => s.trim()).filter((s) => s.length > 0))];
 };
 
 /**
@@ -118,6 +151,7 @@ export function validateTrack(raw: Record<string, unknown>, body: { decisions?: 
     proj: [...new Set(projList as string[])],
     kind: kind as Kind,
     wait: wait as Wait,
+    qian: qianList(raw.qian),
     needs: intList(raw.needs, 'needs'),
     supersedes: intList(raw.supersedes, 'supersedes'),
     ...(unblocks !== undefined ? { unblocks: (unblocks as string).trim() } : {}),
@@ -128,7 +162,19 @@ export const labelsFor = (t: TrackInput): string[] => [
   ...t.proj.map((p) => `${PROJ_PREFIX}${p}`),
   `${KIND_PREFIX}${t.kind}`,
   `${WAIT_PREFIX}${t.wait}`,
+  ...t.qian.map((q) => `${QIAN_PREFIX}${q}`),
 ];
+
+/**
+ * 防漂移软闸的纯核：给定本折的签与仓里现有 label 名，返回**新签**（既不在初始七签、
+ * 也不是仓里已存在的 `签:*` label）。照建照贴不受影响 —— 这只算「该不该 warn」。
+ * existing 拿不到时（读 label 清单失败），调用方传空集，退化成只对种子七签放行。
+ */
+export function unknownQian(qian: readonly string[], existingLabelNames: readonly string[] = []): string[] {
+  const seeded = new Set<string>(QIAN_VALUES);
+  const existing = new Set(existingLabelNames);
+  return qian.filter((q) => !seeded.has(q) && !existing.has(`${QIAN_PREFIX}${q}`));
+}
 
 // ── 关系标记：`<!-- menxia-rel: needs=#49; supersedes=#48,#50; unblocks=… -->` ──
 // 与 `happy-session` 同族：机器可读、读者不可见、活在 PR body 尾部。

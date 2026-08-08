@@ -63,6 +63,7 @@ track: {                       折务追踪（review #61 批定，2026-07-31）�
   proj: string | string[]      项目 slug（小写字母数字连字符）；起新词前先查现有 proj: labels
   kind: enum                   拍板 / 评审 / 设计 / 读物 / 交付 / 参考——主用途取一
   wait: enum?                  你拍 / 你读 / agent / 闲；缺省按规则推：有待拍板段→你拍，读物→闲，其余→你读
+  qian: string[]?              签（主题归堆），如 ["旅行","开发"]；开放集，种子：旅行/开发/身份/工作/健康/钱/文史
   needs: int[]?                本折依赖哪些折的结论
   supersedes: int[]?           本折盖掉/取代哪些折——画可本折时要随手处置它们（#58 僵尸折的教训）
   unblocks: string?            画可后解锁什么，一句话（≤120 字，禁分号/换行/-->）
@@ -72,6 +73,8 @@ track: {                       折务追踪（review #61 批定，2026-07-31）�
 返回：PR 号、PR URL、门下深链 `https://charliezong18.github.io/menxia/?pr=<n>`、lint 报告。
 
 **`track`（2026-07-31 补，review #61）**：贴三类 label（`proj:` / `kind:` / `wait:`，词表常量**只**活在 `src/track.ts` —— 改名的教训：跨系统契约是裸字符串，两头写死必静默失效；阅读器只认前缀）＋ 往 PR body 尾部焊关系标记 `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->`，与 `happy-session` 同族。贴 label 分两步：先按词表定色尽力补建缺的，再一次 `POST …/issues/{n}/labels`（它会把漏网的自动建成默认灰 —— 2026-07-31 对真仓实测）。label 失败只出 warning 绝不报错 —— 折已经呈上去了，把两件事说成一件会引人重呈一折。
+
+**`签`（review #116 补）** 是第四类 label（前缀 `签:`，颜色 `5319e7`，一折可多签），按主题归堆、跨项目跨状态同架，种子七签：旅行/开发/身份/工作/健康/钱/文史。与 proj/kind/wait 不同，签是**开放集**：既不在种子、也不是仓里已有 `签:*` label 的新签照建照贴，但出一条防漂移 warning（不阻断）—— 与 track 缺省只警告同一个哲学。
 
 **`docs` 传路径不传全文**，这是刻意的。同机运行，server 自己把文件拷进它管的 worktree，agent 全程不碰 `~/Developer/review`——互踩才真的堵死。全文经 tool 入参传递不但浪费 token，还会让 agent 保留「我可以自己写进那个仓」的心智模型。
 

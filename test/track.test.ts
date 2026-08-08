@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
   KIND_VALUES,
+  QIAN_VALUES,
   WAIT_VALUES,
   buildRelMarker,
   labelColor,
+  labelDesc,
   labelsFor,
   parseRelMarker,
   trackAudit,
+  unknownQian,
   validateTrack,
   type TrackFolderState,
 } from '../src/track.js';
@@ -49,6 +52,22 @@ describe('validateTrack：校验 + wait 推导', () => {
     expect(validateTrack({ proj: 'a', kind: '评审', needs: [2, 2, 3] }, body()).needs).toEqual([2, 3]);
   });
 
+  it('qian 缺省是空数组；string 归一成单元素数组', () => {
+    expect(validateTrack({ proj: 'a', kind: '评审' }, body()).qian).toEqual([]);
+    expect(validateTrack({ proj: 'a', kind: '评审', qian: '旅行' }, body()).qian).toEqual(['旅行']);
+  });
+
+  it('qian 是开放集：不校验取值，只 trim / 去空 / 去重', () => {
+    expect(validateTrack({ proj: 'a', kind: '评审', qian: [' 旅行 ', '旅行', '', '  '] }, body()).qian).toEqual(['旅行']);
+    // 没有白名单：从没见过的签也照收（软闸在 applyTrackLabels 出 warning，不在这里拦）
+    expect(validateTrack({ proj: 'a', kind: '评审', qian: ['旅行', '玄学'] }, body()).qian).toEqual(['旅行', '玄学']);
+  });
+
+  it('qian 拒非字符串元素 —— label 是裸字符串契约', () => {
+    expect(() => validateTrack({ proj: 'a', kind: '评审', qian: [1] }, body())).toThrow(/qian/);
+    expect(() => validateTrack({ proj: 'a', kind: '评审', qian: 42 }, body())).toThrow(/qian/);
+  });
+
   it('unblocks 拒分号 / --> / 超长 —— 分号是字段分隔符，--> 会把注释提前关掉', () => {
     expect(() => validateTrack({ proj: 'a', kind: '评审', unblocks: 'x; y' }, body())).toThrow(/unblocks/);
     expect(() => validateTrack({ proj: 'a', kind: '评审', unblocks: 'x --> y' }, body())).toThrow(/unblocks/);
@@ -58,9 +77,15 @@ describe('validateTrack：校验 + wait 推导', () => {
   it('词表常量本身没漂：枚举与 T3 首用一致', () => {
     expect([...KIND_VALUES]).toEqual(['拍板', '评审', '设计', '读物', '交付', '参考']);
     expect([...WAIT_VALUES]).toEqual(['你拍', '你读', 'agent', '闲']);
+    // 初始七签是协议常量（两个仓必须一致），改这行就是改契约。
+    expect([...QIAN_VALUES]).toEqual(['旅行', '开发', '身份', '工作', '健康', '钱', '文史']);
     // 红绿灯色是阅读器直接消费的（零映射表）—— 改色就是改契约，必须被这条看见。
     expect(labelColor('wait:你拍')).toBe('D73A4A');
     expect(labelColor('proj:从没见过的')).toBe('BFD4F2');
+    // 签家族统一一个紫，种子签与开放集的新签都落 5319E7（前缀兜底）。
+    expect(labelColor('签:旅行')).toBe('5319E7');
+    expect(labelColor('签:从没见过的')).toBe('5319E7');
+    expect(labelDesc('签:旅行')).toBe('签：旅行（主题归堆）');
   });
 });
 
@@ -70,8 +95,13 @@ describe('关系标记：build ↔ parse 往返', () => {
     body('批'),
   );
 
-  it('labelsFor 产三类 label', () => {
+  it('labelsFor 产三类 label（无签时）', () => {
     expect(labelsFor(t)).toEqual(['proj:zhongshumenxia', 'kind:拍板', 'wait:你拍']);
+  });
+
+  it('labelsFor 把签接在三类之后（proj → kind → wait → 签）', () => {
+    const withQian = validateTrack({ proj: 'menxia', kind: '评审', qian: ['旅行', '开发'] }, body());
+    expect(labelsFor(withQian)).toEqual(['proj:menxia', 'kind:评审', 'wait:你读', '签:旅行', '签:开发']);
   });
 
   it('全字段往返', () => {
@@ -148,5 +178,25 @@ describe('trackAudit：折务四检（纯函数）', () => {
     const notes = trackAudit([open(3, { labels: [] })], [], 'charliezong18/review');
     expect(notes.get(3)![0]).toContain('gh pr edit 3 -R charliezong18/review');
     expect(notes.get(3)![0]).toContain('#61');
+  });
+});
+
+describe('unknownQian：防漂移软闸的纯核', () => {
+  it('初始七签一律不报', () => {
+    expect(unknownQian([...QIAN_VALUES])).toEqual([]);
+  });
+
+  it('新签报出来（照建照贴不受影响，只算该不该 warn）', () => {
+    expect(unknownQian(['旅行', '玄学'])).toEqual(['玄学']);
+  });
+
+  it('仓里已有同名 签: label 的不报 —— 已进过签集就不是新签', () => {
+    expect(unknownQian(['玄学'], ['proj:menxia', '签:玄学'])).toEqual([]);
+    // 只认精确的 签:<名>，别的前缀不算数
+    expect(unknownQian(['玄学'], ['kind:玄学'])).toEqual(['玄学']);
+  });
+
+  it('existing 缺省为空集：退化成只对种子七签放行', () => {
+    expect(unknownQian(['旅行', '玄学'])).toEqual(['玄学']);
   });
 });

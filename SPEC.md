@@ -63,6 +63,7 @@ track: {                       Folder tracking (review #61, approved 2026-07-31)
   proj: string | string[]      Project slug(s), lowercase alnum-dash; check existing proj: labels before coining a new word
   kind: enum                   拍板 / 评审 / 设计 / 读物 / 交付 / 参考 — primary purpose, pick one
   wait: enum?                  你拍 / 你读 / agent / 闲; derived when absent: has decisions → 你拍, 读物 → 闲, else 你读
+  qian: string[]?              签 (topic buckets), e.g. ["旅行","开发"]; open set, seeds: 旅行/开发/身份/工作/健康/钱/文史
   needs: int[]?                Folders whose conclusions this one depends on
   supersedes: int[]?           Folders this one covers/replaces — deal with them when this folder is merged (the #58 zombie lesson)
   unblocks: string?            One phrase: what merging releases (≤120 chars, no semicolons/newlines/-->)
@@ -72,6 +73,8 @@ track: {                       Folder tracking (review #61, approved 2026-07-31)
 Returns: PR number, PR URL, deep link to the annotation desk (menxia) `https://charliezong18.github.io/menxia/?pr=<n>`, lint report.
 
 **`track` (added 2026-07-31, review #61)**: applies three label families (`proj:` / `kind:` / `wait:`, vocabulary constants live **only** in `src/track.ts` — the rename lesson: cross-system contracts are bare strings, hard-code both ends and they fail silently; the reader recognizes prefixes only) and welds a trailing relation marker `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->` into the PR body, same family as `happy-session`. Label application is two-step: best-effort create missing labels with the vocabulary colors, then one `POST …/issues/{n}/labels` (which auto-creates any stragglers in default gray — verified against the real repo 2026-07-31). Label failures are warnings, never errors — the folder is already up; conflating the two makes callers re-submit.
+
+**`签` (added review #116)** is a fourth label family (prefix `签:`, color `5319e7`, one folder may carry many) for topic buckets that cut across project and status — seeds are 旅行/开发/身份/工作/健康/钱/文史. Unlike proj/kind/wait it is an **open set**: a 签 that is neither a seed nor an existing `签:*` label is still created and applied, but surfaces one anti-drift warning (never blocks) — same philosophy as track being warn-only.
 
 **`docs` passes paths, not full text**, this is deliberate. Running on the same machine, the server copies files into the worktree it manages; the agent never touches `~/Developer/review` — parallel trampling is exactly what blocks execution. Passing full text via tool arguments not only wastes tokens, but also keeps the agent in the mental model of "I can write into that repo myself".
 
