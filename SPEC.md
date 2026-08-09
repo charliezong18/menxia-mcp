@@ -365,6 +365,23 @@ These three items **don't matter anymore** — round three of reading menxia sou
    The previous version unconditionally concatenated against `docs/` — images for subdirectory documents would **be reported present by lint, but display as broken in menxia**, skewing towards false negatives.
 3. **Rule 1 adds `docs/.monolingual` to register exemptions.** After fixing the old script's false-pass bug, Rule 1 truly took effect for the first time, leading #31 (22 chapters of Chinese bureaucratic history) to be slapped with 22 hard errors — and no one is going to translate that into English.
 
+**A fourth item added 2026-08-08 (Rule 4's second tightening):**
+
+4. **Rule 4's extractor now recognises `./` and `../` prefixes; the `assets` index is keyed relative to the repo root.**
+
+   | Difference | Old | New | Why |
+   |---|---|---|---|
+   | Prose writes `../assets/x.png` | **Passes** (all three regexes required a literal `assets/` prefix, so it was never extracted at all) | Checked | A false negative — precisely the one thing Rule 4 exists to prevent |
+   | `docs/assets/x.png` vs. root `assets/x.png` | Same key (both snapshot and lint stripped `docs/`) | Two keys | Collapsing them means "referencing the wrong one still counts as correct" |
+
+   Case history: when review #122 was submitted, `assetTarget()` placed the images under `docs/assets/` while the prose used the older layout `../assets/<slug>/`. **Both lint `findings` and `warnings` came back empty**, the broken images were pushed all the way to the remote, and only a manual read-back caught it. The skew is towards false negatives.
+
+   Why the root `assets/` must also be indexed: two layouts coexist in the folder repo and both render correctly — new folders keep images in `docs/assets/` and write `assets/p.png`; guanzhi / the Glacier guide / vox keep theirs in root `assets/<proj>/` and write `../assets/<proj>/p.png`. Widening the extractor without extending the index would slap those older projects with **false broken-image hard errors** on their next submission, which hurts more than the false negative did.
+
+   **The reported path still strips the `docs/` prefix** (display only, not the lookup key): the differential aligns against the retired bash script by matching the `断图：<path>` string, and without stripping, all of Rule 4 falls out of alignment — while §5.2 states plainly that whitelisting all of Rule 4 would let genuine broken-image regressions slip through silently. **Empirically the differential verdict is byte-identical before and after** (30 real folders, unclassified differences steady at 8, all in Rule 1).
+
+   Known residue (recorded here rather than left silent): `normalizePath` handles `..` with `out.pop()`, which truncates silently when it escapes above the repo root, so `../../assets/x.png` and `../assets/x.png` resolve to the same place. Catching that needs underflow detection in `normalizePath`, which is scope creep; deferred.
+
 **Rule 5 empirical data** (all 27 bilingual pairs): False positive rate **0/27**, but discriminative power is also near 0 —
 The median requires 40% missing translation to alarm, 6 pieces missing 95% don't even report, and structurally it cannot see monolingual documents (25 out of 29 monolingual slugs are "Chinese lying in the English slot"). The threshold doesn't need to change (0 false positives, running as a warn has no cost), but **don't document it as "insurance for language direction"** — currently it can only catch "the entire piece wasn't translated a single word".
 

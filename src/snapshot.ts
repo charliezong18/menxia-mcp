@@ -138,14 +138,25 @@ export function collect(opts: SnapshotOpts = {}): Snapshot {
     if (content !== null) files.set(other, content);
   }
 
-  // 仓里真实存在的文件（相对 docs/）。
-  // **扫整个 docs/ 而不是只扫 docs/assets/** —— 图片引用现在按文档自身目录解析
-  // （与 menxia `render.js:26` 一致），子目录文档会解析出 `sub/assets/p.png` 这种路径，
+  // 仓里真实存在的文件，**键＝仓根相对**（`docs/assets/p.png` / `assets/guanzhi/p.png`）。
+  //
+  // **扫整个 docs/ 而不是只扫 docs/assets/** —— 图片引用按文档自身目录解析
+  // （与 menxia `render.js:26` 一致），子目录文档会解析出 `docs/sub/assets/p.png` 这种路径，
   // 只扫 docs/assets/ 的话查不到（第三轮评审）。
-  const tree = tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'docs/']) ?? '';
-  const assets = new Set(
-    tree.split('\n').map((s) => s.trim()).filter(Boolean).map((p) => p.replace(/^docs\//, '')),
-  );
+  //
+  // **也扫仓根 assets/**（2026-08-08 补）：敕草仓里同时存在两种布局 —— 新折的图被
+  // `assetTarget()` 放进 `docs/assets/`、正文写 `assets/p.png`；而 guanzhi / glacier 指南 /
+  // vox 那几个老项目的图在**仓根** `assets/<proj>/`、正文写 `../assets/<proj>/p.png`。
+  // 两种都合法且都在渲染，所以两处都要索引，否则放宽提取器之后老项目会被判假断图。
+  //
+  // ⚠️ 键**不再剥 `docs/` 前缀**。剥了会把 `docs/assets/p.png` 与仓根 `assets/p.png`
+  // 塌成同一个键 —— 那两个是不同的文件、不同的渲染 URL，塌在一起等于「引错了也算对」，
+  // 正是规则 4 唯一要防的那件事。
+  const tree = [
+    tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'docs/']) ?? '',
+    tryGit(cwd, ['ls-tree', '-r', '--name-only', ref, 'assets/']) ?? '',
+  ].join('\n');
+  const assets = new Set(tree.split('\n').map((s) => s.trim()).filter(Boolean));
 
   // .payload：老脚本查 docs/.payload 和 .payload 两个位置。
   const payload = [

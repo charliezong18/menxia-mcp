@@ -41,6 +41,9 @@ beforeAll(() => {
   writeFileSync(join(wt, 'docs', 'a.md'), EN);
   writeFileSync(join(wt, 'docs', 'a.zh-CN.md'), ZH);
   writeFileSync(join(wt, 'docs', 'assets', 'real.png'), 'png');
+  // 仓根 assets/ —— guanzhi / glacier 指南 / vox 那套老布局，正文用 ../assets/ 引（2026-08-08）
+  mkdirSync(join(wt, 'assets', 'proj'), { recursive: true });
+  writeFileSync(join(wt, 'assets', 'proj', 'root.png'), 'png');
   writeFileSync(join(wt, 'docs', '.payload'), 'docs/p.md\n');
   g(wt, 'add', '.');
   g(wt, 'commit', '-qm', 'folder');
@@ -55,10 +58,17 @@ describe('happy path（真 git 仓）', () => {
     expect(s.files.get('docs/a.md')).toBe(EN);
   });
 
-  it('采整个 docs/ 的文件清单（相对 docs/）—— 子目录文档的图要查得到', () => {
+  it('采整个 docs/ 的文件清单（**仓根相对**）—— 子目录文档的图要查得到', () => {
     const a = collect({ worktree: wt, skipFetch: true }).assets;
-    expect(a.has('assets/real.png')).toBe(true);
-    expect(a.has('a.md')).toBe(true);   // 只扫 docs/assets/ 的话这条会假
+    expect(a.has('docs/assets/real.png')).toBe(true);
+    expect(a.has('docs/a.md')).toBe(true);   // 只扫 docs/assets/ 的话这条会假
+    // 键不剥 docs/：剥了会与仓根 assets/ 塌成一个键（2026-08-08）
+    expect(a.has('assets/real.png')).toBe(false);
+  });
+
+  it('**也索引仓根 assets/** —— 否则 `../assets/` 那套布局会被判假断图', () => {
+    const a = collect({ worktree: wt, skipFetch: true }).assets;
+    expect(a.has('assets/proj/root.png')).toBe(true);
   });
 
   it('读到 docs/.payload', () => {

@@ -26,7 +26,10 @@ export interface Snapshot {
   files: Map<string, string>;
   /** 相对 origin/main 动过的 docs/*.md */
   changed: string[];
-  /** 仓里真实存在的 assets/** 路径（相对 docs/） */
+  /**
+   * 仓里真实存在的文件，**键＝仓根相对**（`docs/assets/p.png` / `assets/guanzhi/p.png`）。
+   * 2026-08-08 从「相对 docs/」改过来：剥掉 `docs/` 会让这两个不同文件塌成一个键。
+   */
   assets: Set<string>;
   /** docs/.payload 或 .payload 的行 */
   payload: string[];
@@ -86,6 +89,18 @@ export function cjkRatio(md: string): number {
   return (prose.match(CJK)?.length ?? 0) / meaningful.length;
 }
 
+/**
+ * 一段路径是不是「指向 assets 的相对引用」。
+ *
+ * **`./` 与 `../` 前缀必须认**（2026-08-08 修）。上一版三个正则一律要求字面以
+ * `assets/` 开头，于是 `../assets/<proj>/p.png` 这种写法**根本没被提取**，
+ * 对规则 4 完全不可见 —— 而仓根 `assets/<proj>/` 那套布局的正文正是这么写的。
+ * 实测代价：review #122 呈折时正文引用全错（图落在 `docs/assets/`、正文写
+ * `../assets/<slug>/`），lint 的 findings 与 warnings **都是空数组**，
+ * 断图一路推到远端，靠人肉回读才发现。这是漏报，正是规则 4 唯一要防的那件事。
+ */
+const ASSET_REF = /^(?:\.{1,2}\/)*assets\//;
+
 /** 正文里引用的 assets 路径。**必须先剥代码跨度**（规则 4 的病历见 strip.ts）。 */
 export function assetRefs(md: string): string[] {
   const prose = stripCode(md);
@@ -93,16 +108,16 @@ export function assetRefs(md: string): string[] {
   // markdown 链接/图片语法。用 `[^)]+` 而不是 `[^)\s]+` —— 后者让
   // **文件名带空格的断图静默漏报**（老脚本用 `[^)]+`，能报；第一轮评审实测）。
   // 代价是要自己剥掉 title（`![x](assets/a.png "说明")`）和锚点。
-  for (const m of prose.matchAll(/\]\((assets\/[^)]+)\)/g)) out.add(cleanRef(m[1]!));
+  for (const m of prose.matchAll(/\]\(((?:\.{1,2}\/)*assets\/[^)]+)\)/g)) out.add(cleanRef(m[1]!));
   // 引用式链接定义：`[p]: assets/a.png`
   // 取到**行尾**再收拾，不用 `\S+` —— 那正是上一条刚修掉的空格文件名 bug，
   // 我在新加的这个分支里又种了一遍（第二轮评审抓到）。
   for (const m of prose.matchAll(/^\s{0,3}\[[^\]]+\]:\s*(.+)$/gm)) {
     const r = cleanRef(m[1]!);
-    if (r.startsWith('assets/')) out.add(r);
+    if (ASSET_REF.test(r)) out.add(r);
   }
   // HTML <img src>（**刻意改进**：老脚本只认 markdown 语法，SPEC §5.2 记为改进 #4）
-  for (const m of prose.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']?(assets\/[^"'\s>]+)/gi)) out.add(cleanRef(m[1]!));
+  for (const m of prose.matchAll(/<img\b[^>]*\bsrc\s*=\s*["']?((?:\.{1,2}\/)*assets\/[^"'\s>]+)/gi)) out.add(cleanRef(m[1]!));
   return [...out];
 }
 
@@ -238,14 +253,25 @@ export function lint(snap: Snapshot): Finding[] {
   // 否则根目录或子目录的文档全解析错」）。
   // 上一版一律按 `docs/` 拼，于是子目录文档的图 **lint 说在、menxia 显示断图** ——
   // 方向是漏报，正好是规则 4 唯一要防的那件事（第三轮评审）。
+  //
+  // **比对用仓根相对路径，报出来才剥 `docs/` 前缀**（2026-08-08 改）。上一版拼完还
+  // `.replace(/^docs\//, '')`，而 snapshot 那侧也剥掉了 `docs/` —— 两处一起剥的净效果是把
+  // `docs/assets/p.png` 与仓根 `assets/p.png` 塌成同一个键。那是两个不同的文件、
+  // 两个不同的渲染 URL，塌在一起等于「引错了那一半也算对」。
+  //
+  // 报的是**解析后**的路径而不是正文里的原样引用 —— 子目录文档里 `assets/p.png` 这一个
+  // 写法可以指向好几个不同文件，报原样说不清是哪个（2026-07-30 那道疤定的）。而剥 `docs/`
+  // 纯属显示层：差分脚本按 `断图：<路径>` 的字符串跟 retired bash 对齐，不剥则整条规则 4
+  // 对不齐，而 SPEC §5.2 明说把整条规则 4 白名单化会让真正的断图回归悄悄溜过去。
+  // 指向仓根 assets/ 的引用本来就没有 `docs/` 前缀，原样报。
   const missing = new Set<string>();
   for (const f of snap.changed) {
     const md = snap.files.get(f);
     if (md === undefined) continue;
     const baseDir = f.includes('/') ? f.slice(0, f.lastIndexOf('/') + 1) : '';
     for (const ref of assetRefs(md)) {
-      const resolved = normalizePath(baseDir + ref).replace(/^docs\//, '');
-      if (!snap.assets.has(resolved)) missing.add(resolved);
+      const resolved = normalizePath(baseDir + ref);
+      if (!snap.assets.has(resolved)) missing.add(resolved.replace(/^docs\//, ''));
     }
   }
   for (const ref of [...missing].sort()) push(4, 'hard', ref, `断图：${ref}`);

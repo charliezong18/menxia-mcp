@@ -539,12 +539,16 @@ describe('疤 · 2026-07-30「子目录文档的图是漏报」（第三轮：�
     return { files, changed: [...files.keys()], assets: new Set(assets), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
   };
 
+  // ⚠️ 2026-08-08 起 `assets` 的键是**仓根相对**（`docs/...`），不再剥 `docs/` 前缀 ——
+  // 剥了会让 `docs/assets/p.png` 与仓根 `assets/p.png` 塌成一个键。
+  // 报出来的 subject 仍剥 `docs/`，所以本疤断言的 `sub/assets/p.png` 没变。
+
   it('图在 docs/sub/assets/ → 过（menxia 就是这么解析的）', () => {
-    expect(lint(sub(['sub/assets/p.png'])).some((f) => f.rule === 4)).toBe(false);
+    expect(lint(sub(['docs/sub/assets/p.png'])).some((f) => f.rule === 4)).toBe(false);
   });
 
   it('**图只在 docs/assets/ → 报断图**（上一版会放行，而 menxia 显示断图）', () => {
-    const f = lint(sub(['assets/p.png'])).filter((x) => x.rule === 4);
+    const f = lint(sub(['docs/assets/p.png'])).filter((x) => x.rule === 4);
     expect(f).toHaveLength(1);
     expect(f[0]!.subject).toBe('sub/assets/p.png');
   });
@@ -554,8 +558,29 @@ describe('疤 · 2026-07-30「子目录文档的图是漏报」（第三轮：�
       ['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.\n\n![p](assets/p.png)'],
       ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。'],
     ]);
-    const s: Snapshot = { files, changed: [...files.keys()], assets: new Set(['assets/p.png']), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+    const s: Snapshot = { files, changed: [...files.keys()], assets: new Set(['docs/assets/p.png']), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
     expect(lint(s).some((f) => f.rule === 4)).toBe(false);
+  });
+
+  // ── 2026-08-08 新一道疤：`../assets/` 那一族以前根本没进提取器（review #122）──
+  it('顶层文档写 `../assets/` 指向仓根 —— 图在仓根 → 过', () => {
+    const files = new Map([
+      ['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.\n\n![p](../assets/guanzhi/p.png)'],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。'],
+    ]);
+    const s: Snapshot = { files, changed: [...files.keys()], assets: new Set(['assets/guanzhi/p.png']), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+    expect(lint(s).some((f) => f.rule === 4)).toBe(false);
+  });
+
+  it('顶层文档写 `../assets/` 但图其实在 docs/assets/ → 报断图（#122 那次静默漏报）', () => {
+    const files = new Map([
+      ['docs/a.md', '**English** · [中文](a.zh-CN.md)\n\nEnglish.\n\n![p](../assets/slug/p.png)'],
+      ['docs/a.zh-CN.md', '[English](a.md) · **中文**\n\n中文正文。'],
+    ]);
+    const s: Snapshot = { files, changed: [...files.keys()], assets: new Set(['docs/assets/p.png']), payload: [], monolingual: [], onMain: new Set(), base: { behind: 0, fetchFailed: false } };
+    const f = lint(s).filter((x) => x.rule === 4);
+    expect(f).toHaveLength(1);
+    expect(f[0]!.subject).toBe('assets/slug/p.png');
   });
 });
 

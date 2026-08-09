@@ -123,8 +123,51 @@ describe('规则 3 · .payload 例外 + 勿复制横幅', () => {
 
 describe('规则 4 · 断图', () => {
   it('图在仓里 → 过', () => {
+    // assets 的键是**仓根相对**：`docs/a.md` 里写 `assets/a.png` 解析出 `docs/assets/a.png`
     const files = new Map([['docs/a.md', `${EN('a')}\n\n![x](assets/a.png)`], ['docs/a.zh-CN.md', ZH('a')]]);
-    expect(rules(snap({ files, assets: new Set(['assets/a.png']) }))).not.toContain(4);
+    expect(rules(snap({ files, assets: new Set(['docs/assets/a.png']) }))).not.toContain(4);
+  });
+
+  // ── 2026-08-08 回归：`../assets/` 那一族以前根本没被提取（review #122 实测断图溜过去）──
+
+  it('`../assets/` 指向仓根、图在 → 过（guanzhi / glacier 指南 / vox 的布局）', () => {
+    const files = new Map([
+      ['docs/a.md', `${EN('a')}\n\n![x](../assets/guanzhi/p.png)`],
+      ['docs/a.zh-CN.md', ZH('a')],
+    ]);
+    expect(rules(snap({ files, assets: new Set(['assets/guanzhi/p.png']) }))).not.toContain(4);
+  });
+
+  it('`../assets/` 指向仓根、图不在 → 硬伤（上一版这里静默漏报）', () => {
+    const files = new Map([
+      ['docs/a.md', `${EN('a')}\n\n![x](../assets/nope/p.png)`],
+      ['docs/a.zh-CN.md', ZH('a')],
+    ]);
+    // 报的是解析后的路径；指向仓根的引用没有 docs/ 前缀可剥，所以原样是 assets/nope/p.png
+    expect(lint(snap({ files, assets: new Set(['docs/assets/p.png']) })))
+      .toContainEqual({ rule: 4, severity: 'hard', subject: 'assets/nope/p.png', message: '断图：assets/nope/p.png' });
+  });
+
+  it('**`docs/assets/x` 与仓根 `assets/x` 不再塌成一个键** —— 图在 docs/ 下时 `../assets/x` 必须报', () => {
+    const files = new Map([
+      ['docs/a.md', `${EN('a')}\n\n![x](../assets/p.png)`],
+      ['docs/a.zh-CN.md', ZH('a')],
+    ]);
+    // 图真实位置是 docs/assets/p.png，正文却按仓根写 —— 正是 #122 那次的形状
+    expect(lint(snap({ files, assets: new Set(['docs/assets/p.png']) })).some((f) => f.rule === 4)).toBe(true);
+  });
+
+  it('`./assets/` 前缀同样认', () => {
+    const files = new Map([['docs/a.md', `${EN('a')}\n\n![x](./assets/gone.png)`], ['docs/a.zh-CN.md', ZH('a')]]);
+    expect(rules(snap({ files }))).toContain(4);
+  });
+
+  it('子目录文档的 `../assets/` 解析到 docs/assets/', () => {
+    const files = new Map([
+      ['docs/sub/a.md', `${EN('a')}\n\n![x](../assets/p.png)`],
+      ['docs/sub/a.zh-CN.md', ZH('a')],
+    ]);
+    expect(rules(snap({ files, assets: new Set(['docs/assets/p.png']) }))).not.toContain(4);
   });
 
   it('图不在仓里 → 硬伤，subject 是图片路径', () => {
@@ -254,6 +297,11 @@ describe('helper', () => {
   it('assetRefs 同时认 markdown 与 <img>，并去重', () => {
     expect(assetRefs('![a](assets/x.png) <img src=assets/x.png> <IMG SRC="assets/y.png">').sort())
       .toEqual(['assets/x.png', 'assets/y.png']);
+  });
+
+  it('assetRefs 认 `./` 与 `../` 前缀（含 <img> 与引用式定义）', () => {
+    expect(assetRefs('![a](../assets/x.png)\n![b](./assets/y.png)\n<img src="../../assets/z.png">\n\n[p]: ../assets/w.png').sort())
+      .toEqual(['../../assets/z.png', '../assets/w.png', '../assets/x.png', './assets/y.png']);
   });
 
   it('headings 不把代码块里的 ## 当标题', () => {
