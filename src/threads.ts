@@ -27,6 +27,20 @@ export const DESK_FALLBACK_MARK = /^以下(涂归|朱批)锚定不到可批注�
 
 export const isDeskBody = (body: string): boolean => DESK_MARK.test(body) || DESK_FALLBACK_MARK.test(body);
 
+/**
+ * 续读位置标记（menxia M2 离线包）。阅读台每折存一条会话区 comment 记「读到哪」，
+ * 正文以这个 HTML 注释打头（`<!-- menxia-readstate {json} -->`），PATCH 编辑同一条、零 commit。
+ *
+ * 它**不是判**，是机器状态。不滤掉的后果与 OUR_REPLY_MARK 同族但更糟：它由阅读台
+ * 自动写、且会被反复 PATCH（updated_at 一直刷新），于是每次 read_comments 都把它算成
+ * 一条崭新的 pending 判 —— 一条**清不掉的假待办**（mark_handled 记的水位一 PATCH 就失效）。
+ * 所以在 classifyConversation 入口就把它剔掉，counts/attention 是它的下游、随之干净。
+ *
+ * 认得**宽松**：注释前可能有前导空白/BOM；只要一条 comment 以这个注释打头就算状态标记。
+ */
+export const READSTATE_MARK = /^\s*<!--\s*menxia-readstate\b/;
+export const isReadStateBody = (body: string): boolean => READSTATE_MARK.test(body ?? '');
+
 // —— 原始形状（只声明真正用到的字段，故意不引 Octokit 类型，保持本模块可脱离网络测试）——
 
 export interface RawReview {
@@ -365,7 +379,10 @@ export function classifyConversation(
   handled: Set<number> = new Set(),
 ): ConversationItem[] {
   const deskIds = new Set(deskNotes.map((d) => d.id));
-  return [...items, ...deskNotes]
+  // 续读标记不是判：阅读台自动写、反复 PATCH，不剔掉就变成清不掉的假待办（见 READSTATE_MARK）。
+  // deskNotes 出自 review body，永远不是 readstate（那只走会话区），故只需滤 items。
+  const kept = items.filter((c) => !isReadStateBody(c.body ?? ''));
+  return [...kept, ...deskNotes]
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map((c) => ({
       id: c.id,

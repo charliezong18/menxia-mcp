@@ -18,7 +18,7 @@ import {
   preview,
   type RawInlineComment,
   type RawIssueComment,
-  type RawReview, isDeskBody } from '../src/threads.js';
+  type RawReview, isDeskBody, isReadStateBody } from '../src/threads.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fx = <T>(name: string): T => JSON.parse(readFileSync(join(here, 'fixtures', name), 'utf8')) as T;
@@ -546,5 +546,50 @@ describe('台标新旧并存（2026-07-31 改名，历史折永不重写）', ()
   });
   it('不相干的 review body 不算台标', () => {
     expect(isDeskBody('LGTM')).toBe(false);
+  });
+});
+
+describe('续读标记不是判（menxia M2 离线包）—— 剔在 classifyConversation 入口', () => {
+  const mk = (id: number, body: string, at: string): RawIssueComment => ({ id, body, created_at: at, user: null });
+  const RS = '<!-- menxia-readstate {"device":"iPhone","docPath":"docs/foo.md","anchor":"h2-三","time":"2026-08-12T00:00:00Z"} -->';
+
+  it('isReadStateBody 认标记，且注释前的前导空白/换行不影响', () => {
+    expect(isReadStateBody(RS)).toBe(true);
+    expect(isReadStateBody('\n\n' + RS)).toBe(true);
+    expect(isReadStateBody('<!--menxia-readstate-->')).toBe(true);
+  });
+
+  it('普通判、以及正文中间恰好含该串的判，都不误判成标记', () => {
+    expect(isReadStateBody('这段读到一半，menxia-readstate 是个好设计')).toBe(false);
+    expect(isReadStateBody('LGTM')).toBe(false);
+    expect(isReadStateBody('')).toBe(false);
+  });
+
+  it('混在会话区里的续读标记被剔掉：不进 conversation、不计入 needsReply', () => {
+    const items = [
+      mk(1, '第一条真判', '2026-08-10T10:00:00Z'),
+      mk(999, RS, '2026-08-12T10:00:00Z'),
+      mk(2, '第二条真判', '2026-08-11T10:00:00Z'),
+    ];
+    const conv = classifyConversation(items);
+    expect(conv.map((c) => c.id).sort()).toEqual([1, 2]);
+    expect(conv.find((c) => c.id === 999)).toBeUndefined();
+    // 头号回归：标记反复 PATCH 也不该变成清不掉的假待办。
+    expect(countsOf([], conv).needsReply).toBe(2);
+  });
+
+  it('attention 也不含续读标记（counts/attention 是同一入口的下游）', () => {
+    const items = [mk(999, RS, '2026-08-12T10:00:00Z')];
+    const conv = classifyConversation(items);
+    expect(conv).toEqual([]);
+    expect(attentionOf([], conv)).toEqual([]);
+  });
+
+  it('降级并入判（deskNotes）永不是续读标记，故不受影响', () => {
+    const notes: RawIssueComment[] = [
+      { id: 900, body: '以下涂归锚定不到可批注行（或写于旧版本），并入判：真涂归', created_at: '2026-08-12T09:00:00Z', user: null },
+    ];
+    const conv = classifyConversation([], notes);
+    expect(conv.map((c) => c.id)).toEqual([900]);
   });
 });
