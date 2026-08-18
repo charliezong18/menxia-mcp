@@ -158,7 +158,11 @@ export const TOOLS = [
           description:
             '事实档（史馆 / knowledge layer），本机绝对路径，**路径里必须含 `/knowledge/<proj>/`**——' +
             '项目名从路径读，不猜。落进仓里的 knowledge/<proj>/。体例见 knowledge/README.zh-CN.md：' +
-            '一行一 claim，七字段（id/claim/来源/取证/等级/复核/易变）。敕草正文引 fact id，别复制数值',
+            '一行一 claim，七字段（id / claim / sources / generated / 信源·旁证 / verified / stale_after）。' +
+            '敕草正文引 fact id，别复制数值。' +
+            '**同名可以更新**（史馆本来就跨折累积）：先把 main 上那份读回来当底稿，改完整份传上来。' +
+            '**只进不出**——旧文件里出现过的 id 必须还在，整段删掉会被拦；' +
+            '已失效的改成 `❌已失效` 另起一行写取代关系',
         },
         branch: { type: 'string', description: '覆盖用，默认取第一篇文档的 slug' },
         sessionId: { type: 'string', description: '覆盖用；不给则自行探测，探不到就不埋（绝不编）' },

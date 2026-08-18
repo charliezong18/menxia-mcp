@@ -315,6 +315,58 @@ function place(src: string, wt: string, rel: string, copied: string[]): void {
 const dirOf = (p: string): string => p.slice(0, p.lastIndexOf('/'));
 
 /**
+ * 从事实档正文里抠出 fact id。体例是表格第一列写成行内 code：`` `olympic-011` ``。
+ *
+ * 宽进：认不出的行跳过。这里**只用来判「有没有丢」**，不用来判合法性——
+ * 判合法性会把「体例还没长出来的写法」变成硬伤，而史馆的体例本来就还在改
+ * （2026-08-06 #97 刚改过一轮字段名）。
+ */
+export function factIds(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const m of text.matchAll(/`([a-z][a-z0-9-]*-\d+)`/g)) if (m[1]) out.add(m[1]);
+  return out;
+}
+
+/**
+ * 事实档落盘。**与 docs / assets 不同：同名允许更新，但不许把已有的 id 弄丢。**
+ *
+ * 为什么要单开一条路（2026-08-18 实撞）：`place()` 的「已存在就报错」对 `docs/` 是对的
+ * ——两折撞同一篇文档是真事故。但史馆按体例**注定**要跨折累积：
+ * `knowledge/README.zh-CN.md` 写死「一行一 claim、已失效的不删、改 ❌已失效 另起一行写
+ * 取代关系」。也就是说 `FACTS.md` 第一次随某折进 main 之后，**后面每一折都改不动它了**，
+ * 而报错给的两个出口都不通：改文件名会把同一项目的 FACTS 割成两份（`id` 这个全局引用锚
+ * 就废了，正是 README 点名要避免的）；「往那折的分支上推」在原折已画可时不成立。
+ * 实撞那次（olympic v2 / #148）8 条新查的事实因此进不了史馆，只能把出处散写进正文。
+ *
+ * 那为什么不干脆放行覆盖：整份覆盖会**静默**抹掉历史 claim——少写几行就没了，
+ * 而「这个数曾经是什么、为什么变了」正是史馆要记的东西。所以判据是**只进不出**：
+ * 旧文件里出现过的 id，新文件里必须还在。改 claim 内容、标 `❌已失效`、重排表格
+ * 全部放行（那些都不动 id）；唯独整段删掉会被拦。
+ */
+function placeFacts(src: string, wt: string, rel: string, copied: string[]): void {
+  if (!existsSync(src)) {
+    return fail({ kind: 'worktree', what: `读不到文件：${src}`, hint: 'docs / assets / facts 都要给本机绝对路径。' });
+  }
+  const dst = join(wt, rel);
+  if (existsSync(dst)) {
+    const had = factIds(readFileSync(dst, 'utf8'));
+    const want = factIds(readFileSync(src, 'utf8'));
+    const lost = [...had].filter((id) => !want.has(id));
+    if (lost.length > 0) {
+      return fail({
+        kind: 'worktree',
+        what: `${rel} 更新后丢了 ${lost.length} 条已有的 fact id：${lost.slice(0, 8).join(', ')}${lost.length > 8 ? ' …' : ''}`,
+        hint: '史馆只进不出——已失效的 claim 改成 `❌已失效` 另起一行写取代关系，别整段删掉。' +
+          '「这个数曾经是什么、为什么变了」本身就是要记的。先把 main 上那份读回来当底稿再改。',
+      });
+    }
+  }
+  mkdirSync(dirOf(dst), { recursive: true });
+  copyFileSync(src, dst);
+  copied.push(rel);
+}
+
+/**
  * 图落到仓里哪个路径。
  *
  * 上一版一律拍平成 `docs/assets/<basename>`。**那与敕草仓自己的布局对不上**
@@ -449,7 +501,7 @@ export async function stageFolder(
         const rel = factsTarget(src);
         if (seen.has(rel)) return fail({ kind: 'worktree', what: `两份事实档撞路径：${rel}` });
         seen.add(rel);
-        place(src, wt, rel, copied);
+        placeFacts(src, wt, rel, copied);   // 同名允许更新（史馆累积），但丢 id 会被拦
       }
       if (copied.length === 0) return fail({ kind: 'worktree', what: '一个文档都没有', hint: 'docs 至少要给一对（中英各一份）。' });
 

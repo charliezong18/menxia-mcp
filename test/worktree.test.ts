@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import { acquireLock, stageFolder, factsTarget, STALE_MS } from '../src/worktree.js';
+import { acquireLock, stageFolder, factsTarget, factIds, STALE_MS } from '../src/worktree.js';
 import { isFailure } from '../src/errors.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -260,6 +260,84 @@ describe('stageFolder：端到端', () => {
         { reviewPath: repo, lockPath: join(src, 'l.lock') },
       )).rejects.toThrow(/已经在 main 上/);
       expect(git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads/'])).not.toContain('clash');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  // 2026-08-18 实撞（olympic v2 / #148）：史馆按体例要跨折累积，
+  // 但 FACTS.md 一旦随某折进了 main，后面每一折都改不动它——8 条新查的事实进不去。
+  // 判据不是「随便覆盖」而是**只进不出**：id 不许丢，改内容/标失效/重排全放行。
+  it('事实档同名 —— 允许更新（史馆跨折累积），旧 id 一条不丢就放行', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    // main 上先有一份（模拟前一折已合）
+    mkdirSync(join(repo, 'knowledge', 'olympic-trip'), { recursive: true });
+    writeFileSync(join(repo, 'knowledge', 'olympic-trip', 'FACTS.md'),
+      '| `olympic-001` | 旧 claim | — |\n| `olympic-002` | 另一条 | — |\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-q', '-m', 'facts v1']);
+    git(repo, ['push', '-q', 'origin', 'main']);
+
+    mkdirSync(join(src, 'knowledge', 'olympic-trip'), { recursive: true });
+    writeFileSync(join(src, 'knowledge', 'olympic-trip', 'FACTS.md'),
+      // 001 改了内容、002 标失效、011 是新增 —— 三种都该放行
+      '| `olympic-001` | 改过的 claim | — |\n| `olympic-002` | ~~另一条~~ ❌已失效 | — |\n| `olympic-011` | 新查的 | — |\n');
+    writeFileSync(join(src, 'v2.md'), '# en\n');
+    writeFileSync(join(src, 'v2.zh-CN.md'), '# 中\n');
+    try {
+      const out = await stageFolder(
+        {
+          docs: [join(src, 'v2.md'), join(src, 'v2.zh-CN.md')],
+          facts: [join(src, 'knowledge', 'olympic-trip', 'FACTS.md')],
+          branch: 'facts-update', message: 'm',
+        },
+        noLint,
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      );
+      expect(out.copied).toContain('knowledge/olympic-trip/FACTS.md');
+      const pushed = git(origin, ['show', 'facts-update:knowledge/olympic-trip/FACTS.md']);
+      expect(pushed).toContain('olympic-011');       // 新增落上了
+      expect(pushed).toContain('❌已失效');           // 失效标记落上了
+      expect(pushed).toContain('改过的 claim');
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('事实档更新丢了旧 id —— 拦住，并报出丢的是哪几条', async () => {
+    const { repo, origin, scratch } = fakeReviewRepo();
+    const src = mkScratch();
+    mkdirSync(join(repo, 'knowledge', 'olympic-trip'), { recursive: true });
+    writeFileSync(join(repo, 'knowledge', 'olympic-trip', 'FACTS.md'),
+      '| `olympic-001` | a | — |\n| `olympic-002` | b | — |\n| `olympic-003` | c | — |\n');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-q', '-m', 'facts v1']);
+    git(repo, ['push', '-q', 'origin', 'main']);
+    const before = git(origin, ['for-each-ref', '--format=%(refname)']);
+
+    mkdirSync(join(src, 'knowledge', 'olympic-trip'), { recursive: true });
+    writeFileSync(join(src, 'knowledge', 'olympic-trip', 'FACTS.md'),
+      '| `olympic-001` | a | — |\n');   // 002 / 003 整段删了
+    writeFileSync(join(src, 'v3.md'), '# en\n');
+    try {
+      const e = await stageFolder(
+        {
+          docs: [join(src, 'v3.md')],
+          facts: [join(src, 'knowledge', 'olympic-trip', 'FACTS.md')],
+          branch: 'facts-lossy', message: 'm',
+        },
+        noLint,
+        { reviewPath: repo, lockPath: join(src, 'l.lock') },
+      ).catch((err: unknown) => err);
+      expect(isFailure(e)).toBe(true);
+      const msg = String((e as Error).message);
+      expect(msg).toContain('olympic-002');
+      expect(msg).toContain('olympic-003');
+      expect(msg).not.toContain('olympic-001');    // 没丢的不该出现在名单里
+      // 远端零变化、本地无残留分支
+      expect(git(origin, ['for-each-ref', '--format=%(refname)'])).toBe(before);
+      expect(git(repo, ['for-each-ref', '--format=%(refname)', 'refs/heads/'])).not.toContain('facts-lossy');
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -631,6 +709,29 @@ describe('事实档（史馆 / knowledge layer）', () => {
         expect(isFailure(e)).toBe(true);
         expect(String(e)).toContain('项目名');
       }
+    });
+  });
+
+  // 只用来判「有没有丢」，所以宽进：认不出的跳过，不当体例硬伤
+  // （史馆字段名 2026-08-06 #97 才改过一轮，判合法性会把在改的体例变成红灯）。
+  describe('factIds：从正文抠 fact id', () => {
+    it('认表格第一列的行内 code', () => {
+      expect([...factIds('| `olympic-011` | x | — |\n| `glacier-003` | y |')])
+        .toEqual(['olympic-011', 'glacier-003']);
+    });
+
+    it('失效行照样算——加了删除线和 ❌ 也不影响 id 还在', () => {
+      expect(factIds('| `glacier-090` | ~~旧结论~~ | `deprecated` |').has('glacier-090')).toBe(true);
+    });
+
+    it('正文里引用 id 也算（同一个 id 出现多次只记一次）', () => {
+      expect([...factIds('见 `olympic-005`，另见 `olympic-005` 与 `olympic-009`')])
+        .toEqual(['olympic-005', 'olympic-009']);
+    });
+
+    it('不认没有数字尾巴的普通行内 code —— 否则满篇 `docs/foo.md` 都成了 id', () => {
+      const ids = factIds('用 `npm run build`，路径 `knowledge/README.zh-CN.md`，变量 `foo-bar`');
+      expect([...ids]).toEqual([]);
     });
   });
 
