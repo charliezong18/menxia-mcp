@@ -108,7 +108,12 @@ const qianList = (raw: unknown): string[] => {
 
 /**
  * 校验 + 补全。**wait 缺省不是恒定值，按折的内容推**（#61 §3.1）：
- * 有「待你拍板」段 → 你拍；读物 → 闲；其余 → 你读。显式给的 wait 永远赢。
+ * 有「待你拍板」段 → 你拍；其余（含读物）→ 你读。显式给的 wait 永远赢。
+ *
+ * 读物**不再缺省 `闲`**（2026-09-21，读毕改定·规则 1）：一篇读物呈进来就是欠你一遍阅读，
+ * `闲` 是「读毕、没人等」的状态，不是「刚上架」的状态。旧缺省把每本新书都标成闲，
+ * 弘文馆里分不出哪本翻过哪本没翻；读毕由读侧翻成 `闲`，写侧只负责上架时说实话。
+ * 真要呈一篇不打算读的参考件，显式给 `wait: '闲'` 即可——显式永远赢。
  */
 export function validateTrack(raw: Record<string, unknown>, body: { decisions?: string }): TrackInput {
   const projRaw = raw.proj;
@@ -134,7 +139,7 @@ export function validateTrack(raw: Record<string, unknown>, body: { decisions?: 
     throw new ZhupiFailure({ kind: 'badInput', what: `track.wait 只能是 ${WAIT_VALUES.join(' / ')}，收到 ${JSON.stringify(wait)}` });
   }
   if (wait === undefined) {
-    wait = (body.decisions ?? '').trim() ? '你拍' : kind === '读物' ? '闲' : '你读';
+    wait = (body.decisions ?? '').trim() ? '你拍' : '你读';
   }
   const unblocks = raw.unblocks;
   if (unblocks !== undefined) {

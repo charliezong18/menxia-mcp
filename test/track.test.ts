@@ -26,14 +26,26 @@ describe('validateTrack：校验 + wait 推导', () => {
     expect(t.kind).toBe('评审');
   });
 
-  it('wait 缺省按规则推：有待拍板段→你拍；读物→闲；其余→你读', () => {
+  it('wait 缺省按规则推：有待拍板段→你拍；其余→你读', () => {
     expect(validateTrack({ proj: 'a', kind: '评审' }, body('1) 批不批？')).wait).toBe('你拍');
-    expect(validateTrack({ proj: 'a', kind: '读物' }, body('')).wait).toBe('闲');
     expect(validateTrack({ proj: 'a', kind: '评审' }, body('')).wait).toBe('你读');
+    expect(validateTrack({ proj: 'a', kind: '参考' }, body('')).wait).toBe('你读');
   });
 
-  it('显式 wait 永远赢过推导', () => {
+  // 2026-09-21 读毕改定·规则 1：读物上架就是欠你一遍阅读，`闲` 留给读毕。
+  // 旧缺省「读物→闲」让弘文馆分不出翻过没翻过——这条钉死不许倒回去。
+  it('读物缺省 wait 是你读，不再是闲（读毕由读侧翻成闲）', () => {
+    expect(validateTrack({ proj: 'a', kind: '读物' }, body('')).wait).toBe('你读');
+    expect(validateTrack({ proj: 'a', kind: '读物' }, body('')).wait).not.toBe('闲');
+    // 带拍板段的读物照旧优先 你拍（如 #7「待发的对外草稿」）
+    expect(validateTrack({ proj: 'a', kind: '读物' }, body('1) 发不发？')).wait).toBe('你拍');
+    // label 跟着走：新书贴的是 wait:你读
+    expect(labelsFor(validateTrack({ proj: 'a', kind: '读物' }, body('')))).toContain('wait:你读');
+  });
+
+  it('显式 wait 永远赢过推导（含显式给读物标闲）', () => {
     expect(validateTrack({ proj: 'a', kind: '评审', wait: 'agent' }, body('有拍板段')).wait).toBe('agent');
+    expect(validateTrack({ proj: 'a', kind: '读物', wait: '闲' }, body('')).wait).toBe('闲');
   });
 
   it('kind / wait 枚举外直接拒', () => {

@@ -62,7 +62,7 @@ monolingual: boolean?          This folder is a monolingual reading, exempt from
 track: {                       Folder tracking (review #61, approved 2026-07-31). Omitting it only warns — but don't let new folders go in bare
   proj: string | string[]      Project slug(s), lowercase alnum-dash; check existing proj: labels before coining a new word
   kind: enum                   拍板 / 评审 / 设计 / 读物 / 交付 / 参考 — primary purpose, pick one
-  wait: enum?                  你拍 / 你读 / agent / 闲; derived when absent: has decisions → 你拍, 读物 → 闲, else 你读
+  wait: enum?                  你拍 / 你读 / agent / 闲; derived when absent: has decisions → 你拍, else 你读 (readings included — a new reading is owed a read; 闲 is "finished", flipped by the reader side)
   qian: string[]?              签 (topic buckets), e.g. ["旅行","开发"]; open set, seeds: 旅行/开发/身份/工作/健康/钱/文史
   needs: int[]?                Folders whose conclusions this one depends on
   supersedes: int[]?           Folders this one covers/replaces — deal with them when this folder is merged (the #58 zombie lesson)

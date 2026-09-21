@@ -185,7 +185,10 @@ export const TOOLS = [
             wait: {
               type: 'string',
               enum: [...WAIT_VALUES],
-              description: '等谁。不给按规则推：有「待你拍板」段→你拍；读物→闲；其余→你读',
+              description:
+                '等谁。不给按规则推：有「待你拍板」段→你拍；其余（含读物）→你读。' +
+                '读物上架就是等你读，读毕才是闲——`闲` 由读侧翻，写侧不再替新书标闲；' +
+                '真不打算读的参考件显式给 `闲`',
             },
             qian: {
               type: 'array',
