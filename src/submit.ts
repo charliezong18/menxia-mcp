@@ -28,7 +28,8 @@ import { buildRelMarker, labelColor, labelDesc, labelsFor, trackAudit, unknownQi
 
 // 2026-07-31 仓与 Pages 由 menxia 改名 menxia。旧址 /zhupi/ 现在是一个只做转发的壳仓，
 // 原样带走 query 与 hash，所以历史折 body 里的 directLink 仍然点得开。新折一律发新址。
-export const deskUrl = (pr: number): string => `https://charliezong18.github.io/menxia/?pr=${pr}`;
+// 2026-10-19 再迁到独立 org（Q10 origin 隔离）；旧址 charliezong18.github.io/menxia/ 同样只做转发。
+export const deskUrl = (pr: number): string => `https://menxia-reader.github.io/menxia/?pr=${pr}`;
 
 /** `docs/<slug>.md` / `docs/<slug>.zh-CN.md` → `<slug>`。分支名与文件名同源，这是既有惯例。 */
 export function slugOf(docPath: string): string {

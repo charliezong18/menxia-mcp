@@ -49,7 +49,7 @@ describe('回话前缀焊死（硬约定③）', () => {
 
 describe('主输出是门下深链，不是 PR 链接', () => {
   it('deskUrl 指向门下', () => {
-    expect(deskUrl(36)).toBe('https://charliezong18.github.io/menxia/?pr=36');
+    expect(deskUrl(36)).toBe('https://menxia-reader.github.io/menxia/?pr=36');
   });
 
   it('工具描述里明写别拿 PR 链接当主输出（2026-07-27 踩过）', () => {

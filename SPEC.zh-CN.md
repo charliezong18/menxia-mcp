@@ -4,7 +4,7 @@
 
 设计定稿 · 2026-07-28
 
-配套产品：[`charliezong18/menxia`](https://github.com/charliezong18/menxia)（门下，人的一侧）。本仓是 agent 的一侧。
+配套产品：[`menxia-reader/menxia`](https://github.com/menxia-reader/menxia)（门下，人的一侧）。本仓是 agent 的一侧。
 
 ---
 
@@ -36,7 +36,7 @@
 
 - **画可（squash merge）不做工具。** 那是 Charlie 在门下上点的动作，agent 侧没有理由持有这个能力。
 - **交付后的记账不做工具**（tracker 编号、STATUS.md 在途表）——那些散落在不同 vault 位置，属于 skill 的散文职责，不适合固化成 schema。
-- **不改 门下 前端。** 本仓与 `charliezong18/menxia` 只通过 GitHub（PR body 约定、`<!-- happy-session: -->` 标记格式）耦合，不共享代码。
+- **不改 门下 前端。** 本仓与 `menxia-reader/menxia` 只通过 GitHub（PR body 约定、`<!-- happy-session: -->` 标记格式）耦合，不共享代码。
 
 ---
 
@@ -70,7 +70,7 @@ track: {                       折务追踪（review #61 批定，2026-07-31）�
 }
 ```
 
-返回：PR 号、PR URL、门下深链 `https://charliezong18.github.io/menxia/?pr=<n>`、lint 报告。
+返回：PR 号、PR URL、门下深链 `https://menxia-reader.github.io/menxia/?pr=<n>`、lint 报告。
 
 **`track`（2026-07-31 补，review #61）**：贴三类 label（`proj:` / `kind:` / `wait:`，词表常量**只**活在 `src/track.ts` —— 改名的教训：跨系统契约是裸字符串，两头写死必静默失效；阅读器只认前缀）＋ 往 PR body 尾部焊关系标记 `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->`，与 `happy-session` 同族。贴 label 分两步：先按词表定色尽力补建缺的，再一次 `POST …/issues/{n}/labels`（它会把漏网的自动建成默认灰 —— 2026-07-31 对真仓实测）。label 失败只出 warning 绝不报错 —— 折已经呈上去了，把两件事说成一件会引人重呈一折。
 

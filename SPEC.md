@@ -4,7 +4,7 @@
 
 Final Design · 2026-07-28
 
-Companion product: [`charliezong18/menxia`](https://github.com/charliezong18/menxia) (the annotation desk (menxia), human side). This repo is the agent side.
+Companion product: [`menxia-reader/menxia`](https://github.com/menxia-reader/menxia) (the annotation desk (menxia), human side). This repo is the agent side.
 
 ---
 
@@ -36,7 +36,7 @@ This iteration solves the two things left unsolved from that time.
 
 - **sealed (squash-merged) will not be a tool.** That is an action Charlie clicks on the annotation desk (menxia); the agent side has no reason to hold this capability.
 - **Post-delivery ledger entry will not be a tool** (tracker numbers, STATUS.md in-flight tables) — those are scattered across different vault locations, belong to the skill's prose responsibilities, and are unfit to be hardcoded into schemas.
-- **No changes to the menxia frontend.** This repo couples with `charliezong18/menxia` solely via GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
+- **No changes to the menxia frontend.** This repo couples with `menxia-reader/menxia` solely via GitHub (PR body conventions, `<!-- happy-session: -->` marker format); they do not share code.
 
 ---
 
@@ -70,7 +70,7 @@ track: {                       Folder tracking (review #61, approved 2026-07-31)
 }
 ```
 
-Returns: PR number, PR URL, deep link to the annotation desk (menxia) `https://charliezong18.github.io/menxia/?pr=<n>`, lint report.
+Returns: PR number, PR URL, deep link to the annotation desk (menxia) `https://menxia-reader.github.io/menxia/?pr=<n>`, lint report.
 
 **`track` (added 2026-07-31, review #61)**: applies three label families (`proj:` / `kind:` / `wait:`, vocabulary constants live **only** in `src/track.ts` — the rename lesson: cross-system contracts are bare strings, hard-code both ends and they fail silently; the reader recognizes prefixes only) and welds a trailing relation marker `<!-- menxia-rel: needs=…; supersedes=…; unblocks=… -->` into the PR body, same family as `happy-session`. Label application is two-step: best-effort create missing labels with the vocabulary colors, then one `POST …/issues/{n}/labels` (which auto-creates any stragglers in default gray — verified against the real repo 2026-07-31). Label failures are warnings, never errors — the folder is already up; conflating the two makes callers re-submit.
 
