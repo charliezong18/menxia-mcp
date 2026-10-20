@@ -3,10 +3,10 @@
 
 # menxia-mcp
 
-**The agent-side of [the annotation desk (menxia)](https://github.com/charliezong18/menxia), built as an MCP server.**<br>
+**The agent-side of [the annotation desk (menxia)](https://github.com/menxia-reader/menxia), built as an MCP server.**<br>
 The annotation desk (menxia) is where humans read long documents written by AI, highlight sentences, and leave comments. This repo is the other end of that loop: the set of tools used by the agent to submit a folder, read back comments, and reply to them one by one.
 
-[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [menxia core](https://github.com/charliezong18/menxia)
+[Design Spec](SPEC.zh-CN.md) · [Milestones](MILESTONES.zh-CN.md) · [Backlog](BACKLOG.zh-CN.md) · [menxia core](https://github.com/menxia-reader/menxia)
 
 </div>
 

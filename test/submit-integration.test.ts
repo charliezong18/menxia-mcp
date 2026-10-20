@@ -137,7 +137,7 @@ describe('open_folder：整条链', () => {
 
     expect(out.pr).toBe(42);
     // 主输出是门下深链（2026-07-27：给 GitHub 链接会被读成「让你发涂归你却发了个 PR」）
-    expect(out.desk).toBe('https://charliezong18.github.io/menxia/?pr=42');
+    expect(out.desk).toBe('https://menxia-reader.github.io/menxia/?pr=42');
     // 不带 track 恒有且只有这一条警告（#61：新折别裸奔）。用全等锁死 ——
     // 免得将来别的警告躲进「track 缺省」这条的影子里溜过去。
     expect(out.warnings).toEqual(['本折没带 track（proj/kind/wait）—— 门下分组会把它落到「未标注」，词表与规矩见 review #61']);
