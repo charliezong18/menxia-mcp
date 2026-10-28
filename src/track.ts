@@ -12,6 +12,9 @@ export const PROJ_PREFIX = 'proj:';
 export const KIND_PREFIX = 'kind:';
 export const WAIT_PREFIX = 'wait:';
 export const QIAN_PREFIX = '签:';
+// 截止（#192 Q5 / #186 E1）：写 label `due:YYYY-MM-DD`，不写正文。
+export const DUE_PREFIX = 'due:';
+export const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 export const KIND_VALUES = ['拍板', '评审', '设计', '读物', '交付', '参考'] as const;
 export const WAIT_VALUES = ['你拍', '你读', 'agent', '闲'] as const;
@@ -51,18 +54,30 @@ export const LABEL_COLORS: Readonly<Record<string, string>> = {
 };
 export const DEFAULT_PROJ_COLOR = 'BFD4F2';
 export const QIAN_COLOR = '5319E7';
+export const DUE_COLOR = 'FBCA04';
 
 export const labelColor = (name: string): string =>
   LABEL_COLORS[name] ??
-  (name.startsWith(PROJ_PREFIX) ? DEFAULT_PROJ_COLOR : name.startsWith(QIAN_PREFIX) ? QIAN_COLOR : 'EDEDED');
+  (name.startsWith(PROJ_PREFIX)
+    ? DEFAULT_PROJ_COLOR
+    : name.startsWith(QIAN_PREFIX)
+      ? QIAN_COLOR
+      : name.startsWith(DUE_PREFIX)
+        ? DUE_COLOR
+        : 'EDEDED');
 
 export const labelDesc = (name: string): string => {
   if (name.startsWith(PROJ_PREFIX)) return `项目：${name.slice(PROJ_PREFIX.length)}`;
   if (name.startsWith(KIND_PREFIX)) return `主用途：${name.slice(KIND_PREFIX.length)}`;
   if (name.startsWith(WAIT_PREFIX)) return `等：${name.slice(WAIT_PREFIX.length)}`;
   if (name.startsWith(QIAN_PREFIX)) return `签：${name.slice(QIAN_PREFIX.length)}（主题归堆）`;
+  if (name.startsWith(DUE_PREFIX)) return '截止';
   return '';
 };
+
+/** 从 label 名列表里读出 due 日期（取第一个格式合法的）；没有返回 undefined。 */
+export const dueOf = (labelNames: readonly string[]): string | undefined =>
+  labelNames.map((l) => (l.startsWith(DUE_PREFIX) ? l.slice(DUE_PREFIX.length) : '')).find((d) => DUE_RE.test(d));
 
 /** 校验后的 track。proj 恒为数组（≥1），wait 恒有值（缺省时按规则推出来），qian 恒为数组（可空）。 */
 export interface TrackInput {
@@ -73,6 +88,8 @@ export interface TrackInput {
   needs: number[];
   supersedes: number[];
   unblocks?: string;
+  /** 截止日 YYYY-MM-DD，贴成 label `due:<日期>`。 */
+  due?: string;
 }
 
 // proj slug 与分支名同一个字形世界：小写字母数字连字符。中文/大写直接拒 ——
@@ -152,6 +169,14 @@ export function validateTrack(raw: Record<string, unknown>, body: { decisions?: 
       throw new ZhupiFailure({ kind: 'badInput', what: 'track.unblocks 要一句话：≤120 字，不能含分号、换行、-->' });
     }
   }
+  const due = raw.due;
+  if (due !== undefined && due !== null) {
+    const d = typeof due === 'string' && DUE_RE.test(due) ? new Date(`${due}T00:00:00Z`) : null;
+    const real = d !== null && !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === due;
+    if (!real) {
+      throw new ZhupiFailure({ kind: 'badInput', what: `track.due 得是 YYYY-MM-DD（真实日期），收到 ${JSON.stringify(due)}` });
+    }
+  }
   return {
     proj: [...new Set(projList as string[])],
     kind: kind as Kind,
@@ -160,6 +185,7 @@ export function validateTrack(raw: Record<string, unknown>, body: { decisions?: 
     needs: intList(raw.needs, 'needs'),
     supersedes: intList(raw.supersedes, 'supersedes'),
     ...(unblocks !== undefined ? { unblocks: (unblocks as string).trim() } : {}),
+    ...(typeof due === 'string' ? { due } : {}),
   };
 }
 
@@ -168,6 +194,7 @@ export const labelsFor = (t: TrackInput): string[] => [
   `${KIND_PREFIX}${t.kind}`,
   `${WAIT_PREFIX}${t.wait}`,
   ...t.qian.map((q) => `${QIAN_PREFIX}${q}`),
+  ...(t.due ? [`${DUE_PREFIX}${t.due}`] : []),
 ];
 
 /**
@@ -245,7 +272,14 @@ export interface TrackFolderState {
  *   ③ wait 漂移 —— 标着「等你」，实际 needsReply>0（在等 agent）
  *   ④ 可画可候选 —— 他批过（engaged）且批注全处理完：「能不能合并」那条涂归要的就是这个
  */
-export function trackAudit(open: TrackFolderState[], merged: TrackFolderState[], repoSlug: string): Map<number, string[]> {
+export const DUE_OVERDUE_GRACE_DAYS = 14;
+
+export function trackAudit(
+  open: TrackFolderState[],
+  merged: TrackFolderState[],
+  repoSlug: string,
+  now: Date = new Date(),
+): Map<number, string[]> {
   const notes = new Map<number, string[]>();
   const add = (pr: number, note: string): void => {
     if (!notes.has(pr)) notes.set(pr, []);
@@ -266,6 +300,12 @@ export function trackAudit(open: TrackFolderState[], merged: TrackFolderState[],
         o.number,
         `缺折务追踪 label —— 补：gh pr edit ${o.number} -R ${repoSlug} --add-label "proj:<项目>" --add-label "kind:<主用途>" --add-label "wait:<等谁>"（词表见 #61）`,
       );
+    }
+    // ⑤ 截止过期超 14 天 —— 只报不改（#192 Q6=C）
+    const due = dueOf(o.labels);
+    if (due) {
+      const days = Math.floor((now.getTime() - new Date(`${due}T00:00:00Z`).getTime()) / 86_400_000);
+      if (days > DUE_OVERDUE_GRACE_DAYS) add(o.number, `截止 ${due} 已过 ${days} 天——改日期或摘 label`);
     }
     const rel = parseRelMarker(o.body);
     for (const target of rel.supersedes) {

@@ -129,6 +129,7 @@ export const TOOLS = [
       '写了就是断图 —— review #122 栽过）\n' +
       '· `monolingual: true` = 这折只有一种语言、不需要译本（如中文读物）——免双语对，' +
       '会登记进 `docs/.monolingual`。**别拿它绕过「该翻没翻」**：判据是「这东西本来就不该有译本」\n' +
+      '· 有硬截止就给 `track.due`（YYYY-MM-DD，贴成 label `due:<日期>`），邸报头条靠它——截止写 label，不写正文\n' +
       '· 分支名默认取第一篇文档的 slug；分支已存在会**明着报错**，不覆盖（重复呈折是真事故）\n' +
       '· 体例闸门卡在 commit 之后、push 之前：不合格时**远端一片干净**，什么都没推上去\n' +
       '· 返回的 `desk` 是门下深链，**给他这个**；`prUrl` 是载体，别当主输出' +
@@ -205,6 +206,10 @@ export const TOOLS = [
               description: '本折盖掉/取代哪些折——画可本折时要随手处置它们（#58 僵尸折的教训）',
             },
             unblocks: { type: 'string', description: '画可后解锁什么，一句话（≤120 字，禁分号/换行/-->）' },
+            due: {
+              type: 'string',
+              description: '截止 YYYY-MM-DD，贴成 label due:<日期>（#192 Q5）；备注写标题，不另加 label',
+            },
           },
           additionalProperties: false,
         },
@@ -517,10 +522,10 @@ export async function handleTool(
     let track: TrackInput | undefined;
     if (args.track !== undefined) {
       if (typeof args.track !== 'object' || args.track === null || Array.isArray(args.track)) {
-        throw new ZhupiFailure({ kind: 'badInput', what: 'track 得是对象：{ proj, kind, wait?, qian?, needs?, supersedes?, unblocks? }' });
+        throw new ZhupiFailure({ kind: 'badInput', what: 'track 得是对象：{ proj, kind, wait?, qian?, needs?, supersedes?, unblocks?, due? }' });
       }
       rejectUnknownKeys('open_folder 的 track', args.track as Record<string, unknown>, [
-        'proj', 'kind', 'wait', 'qian', 'needs', 'supersedes', 'unblocks',
+        'proj', 'kind', 'wait', 'qian', 'needs', 'supersedes', 'unblocks', 'due',
       ]);
       track = validateTrack(args.track as Record<string, unknown>, args.body as FolderBody);
     }

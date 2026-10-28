@@ -67,6 +67,7 @@ track: {                       Folder tracking (review #61, approved 2026-07-31)
   needs: int[]?                Folders whose conclusions this one depends on
   supersedes: int[]?           Folders this one covers/replaces — deal with them when this folder is merged (the #58 zombie lesson)
   unblocks: string?            One phrase: what merging releases (≤120 chars, no semicolons/newlines/-->)
+  due: string?                 Deadline YYYY-MM-DD (real date), stamped as label due:<date> (#192 Q5); audit reports it once overdue by >14 days
 }
 ```
 

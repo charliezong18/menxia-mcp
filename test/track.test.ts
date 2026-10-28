@@ -136,6 +136,42 @@ describe('关系标记：build ↔ parse 往返', () => {
   });
 });
 
+describe('track.due：截止 label', () => {
+  it('合法 due → labels 含 due:<日期>，颜色 FBCA04、描述「截止」', () => {
+    const t = validateTrack({ proj: 'a', kind: '评审', due: '2026-11-05' }, body());
+    expect(t.due).toBe('2026-11-05');
+    expect(labelsFor(t)).toContain('due:2026-11-05');
+    expect(labelColor('due:2026-11-05')).toBe('FBCA04');
+    expect(labelDesc('due:2026-11-05')).toBe('截止');
+  });
+
+  it('坏格式 / 不存在的日期 → badInput', () => {
+    expect(() => validateTrack({ proj: 'a', kind: '评审', due: '2026-13-01' }, body())).toThrow(ZhupiFailure);
+    expect(() => validateTrack({ proj: 'a', kind: '评审', due: '2026-02-30' }, body())).toThrow(/due/);
+    expect(() => validateTrack({ proj: 'a', kind: '评审', due: '11-05' }, body())).toThrow(/due/);
+    expect(() => validateTrack({ proj: 'a', kind: '评审', due: 20261105 }, body())).toThrow(/due/);
+  });
+
+  it('无 due → labels 不含 due:', () => {
+    const t = validateTrack({ proj: 'a', kind: '评审' }, body());
+    expect(t.due).toBeUndefined();
+    expect(labelsFor(t).some((l) => l.startsWith('due:'))).toBe(false);
+  });
+
+  it('audit：过期 >14 天出 note，≤14 天不出', () => {
+    const now = new Date('2026-11-20T12:00:00Z');
+    const mk = (n: number, due: string): TrackFolderState => ({
+      number: n,
+      labels: ['proj:menxia', 'kind:评审', 'wait:你读', `due:${due}`],
+      body: null,
+    });
+    const notes = trackAudit([mk(1, '2026-11-05'), mk(2, '2026-11-06'), mk(3, '2026-12-01')], [], 'o/r', now);
+    expect(notes.get(1)![0]).toBe('截止 2026-11-05 已过 15 天——改日期或摘 label');
+    expect(notes.get(2) ?? []).toEqual([]);
+    expect(notes.get(3) ?? []).toEqual([]);
+  });
+});
+
 describe('trackAudit：折务四检（纯函数）', () => {
   const open = (n: number, extra: Partial<TrackFolderState> = {}): TrackFolderState => ({
     number: n,

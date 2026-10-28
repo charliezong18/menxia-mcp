@@ -7,6 +7,7 @@ import { reviewRepo, type RepoRef } from './config.js';
 import { get, repoReadable } from './github.js';
 import { fail, redact } from './errors.js';
 import { handledIds, load, type ProcessedStore } from './processed.js';
+import { dueOf } from './track.js';
 import {
   attentionOf,
   buildInlineThreads,
@@ -35,6 +36,8 @@ export interface FolderSummary {
   counts: Counts;
   /** 要人看一眼的东西，带正文预览——光给数字答不了「哪些折在等我」。 */
   attention: AttentionItem[];
+  /** 截止日（label `due:YYYY-MM-DD`）；没有则省略。 */
+  due?: string;
 }
 
 export interface FolderDetail extends FolderSummary {
@@ -50,6 +53,7 @@ interface RawPull {
   merged_at: string | null;
   updated_at?: string;
   created_at?: string;
+  labels?: { name: string }[];
 }
 
 const PER_PAGE = 100;
@@ -137,8 +141,14 @@ async function hydrate(ref: RepoRef, pull: RawPull, store: ProcessedStore): Prom
     conversation,
     counts: countsOf(inline, conversation),
     attention: attentionOf(inline, conversation),
+    ...dueField(pull),
   };
 }
+
+const dueField = (pull: RawPull): { due?: string } => {
+  const due = dueOf((pull.labels ?? []).map((l) => l.name));
+  return due ? { due } : {};
+};
 
 /**
  * 一折读失败**不能**拖垮整个列表。
@@ -191,6 +201,7 @@ export const summarize = (d: FolderDetail | FolderError): FolderSummary | Folder
         updatedAt: d.updatedAt,
         counts: d.counts,
         attention: d.attention,
+        ...(d.due ? { due: d.due } : {}),
       };
 
 /** 某折当前全部会话区 comment id —— 灌水位用（一次清空积压）。 */
