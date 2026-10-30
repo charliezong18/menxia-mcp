@@ -42,7 +42,14 @@ while read -r _lref lsha _rref rsha; do
   if ! is_zero "$rsha" && git cat-file -e "${rsha}^{commit}" 2>/dev/null; then
     ADDED+="$(git diff "$rsha" "$lsha" -- . "${LEGACY_SKIP[@]}" | grep '^+' || true)"$'\n'
   else
-    WIDEN=1
+    # 新分支首次推送（远端无对应 ref）：以 origin/main 为基算增量，只查这条分支自己加的。
+    # 否则 main 上早就存在的旧文件会被当成「本次新增」误拦。连 origin/main 都拿不到才全仓扫。
+    BASE="$(git merge-base "$lsha" refs/remotes/origin/main 2>/dev/null || true)"
+    if [ -n "$BASE" ]; then
+      ADDED+="$(git diff "$BASE" "$lsha" -- . "${LEGACY_SKIP[@]}" | grep '^+' || true)"$'\n'
+    else
+      WIDEN=1
+    fi
   fi
 done
 
