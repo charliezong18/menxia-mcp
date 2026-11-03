@@ -126,19 +126,41 @@ export function branchProblem(b: string): string | null {
   return null;
 }
 
+type HeadPr = { number: number; html_url: string; state?: string; merged_at?: string | null; head?: { ref?: string; sha?: string } };
+
 /**
- * 这条分支上**开着的**折。拿来做幂等：重试时先认领，别开第二折。
- * 只认 open —— 已画可 / 已关的同名分支是另一回事（stageFolder 那边会按「远端已存在」处理）。
+ * 这条分支上的折，**全部状态**（open / closed / merged）。拿来做幂等：重试时先认领，别开第二折。
+ * · `open` —— 开着的那一折，认领它。
+ * · `ended` —— 已画可 / 已关的同名折。**命中就不许再建**（评审 menxia-mcp#7 高危）：
+ *   敕草仓 `delete_branch_on_merge: false`，画可之后分支还在远端，内容又逐字节相同，
+ *   stageFolder 会判成「续推」；只查 open 的话就会走到 POST /pulls、再开一折 ——
+ *   正是「重复呈折」那起真事故；GitHub 若回 422，又会陷进「原样重试是安全的」死循环。
  */
-async function openPrForHead(ref: RepoRef, branch: string): Promise<{ number: number; html_url: string } | null> {
-  const list = await get<Array<{ number: number; html_url: string; state?: string; head?: { ref?: string } }>>(
+async function prsForHead(ref: RepoRef, branch: string, tipSha: string): Promise<{ open: HeadPr | null; ended: HeadPr | null }> {
+  const list = await get<HeadPr[]>(
     'GET /repos/{owner}/{repo}/pulls',
-    { owner: ref.owner, repo: ref.repo, state: 'open', head: `${ref.owner}:${branch}`, per_page: 100 },
+    { owner: ref.owner, repo: ref.repo, state: 'all', head: `${ref.owner}:${branch}`, per_page: 100 },
     { pageGuard: { kind: 'tooManyFolders', repo: ref.slug } },
   );
   // head 过滤再在本地核一遍：不全信服务端的 query 解析（假 server / 代理未必认 head=）。
-  const hit = list.find((p) => p.head?.ref === branch && (p.state === undefined || p.state === 'open'));
-  return hit ? { number: hit.number, html_url: hit.html_url } : null;
+  const mine = list.filter((p) => p.head?.ref === branch);
+  const open = mine.find((p) => p.state === undefined || p.state === 'open') ?? null;
+  // 已结束的折只在「它的 head 就是远端分支现在这个 commit」时才算数：
+  // 关折删了分支、后来同名重呈推了新 commit（#74 那种正当重开）不该被旧折挡住。
+  // 拿不到 head.sha 就保守地算数（宁可拒、不可重复呈折）。
+  const ended = mine.find((p) => p.state !== undefined && p.state !== 'open' && (!p.head?.sha || p.head.sha === tipSha)) ?? null;
+  return { open, ended };
+}
+
+/** 同名分支上已经有画可 / 已关的折：拒，不建新折，也不说「重试安全」。 */
+function endedFolderFailure(branch: string, pr: HeadPr): never {
+  const what = pr.merged_at ? '画可（merged）' : '关闭（closed）';
+  return fail({
+    kind: 'worktree',
+    what: `分支 ${branch} 在远端已经存在，且它的折 #${pr.number} 已经${what}了 —— 没有再建折`,
+    hint: '重复呈折是真事故（同一篇被呈两次，他会看到两折）。这不是网络问题，原样重试不会变。' +
+      `要补内容或出新版本就换一个 branch 另开一折（正文里写明接续 #${pr.number}）；确实要重开旧折得等 Charlie 拍板。`,
+  });
 }
 
 export async function openFolder(
@@ -205,13 +227,16 @@ export async function openFolder(
 
   // 续推：上次可能其实已经建成了（POST 到了 GitHub、回包丢在路上）。先认领，别开第二折。
   if (staged.resumed) {
-    pr = await openPrForHead(ref, branch).catch((e: unknown) => {
+    const heads = await prsForHead(ref, branch, staged.headSha).catch((e: unknown) => {
       return fail({
         kind: 'worktree',
         what: `分支 ${branch} 已经推上去了，但查不了它有没有折：${String((e as Error)?.message ?? e)}`,
         hint: '什么都没新建。网络好了原样重试 open_folder 即可 —— 它会先认领已有的折，不会重复建。别换 slug 重来（会留孤儿分支）。',
       });
     });
+    // 开着的优先认领；没有开着的、却有画可/已关的 → 拒（不是重试，是重复呈折）。
+    pr = heads.open;
+    if (!pr && heads.ended) endedFolderFailure(branch, heads.ended);
     if (pr) {
       outcome = 'existing';
       warnings.push(`#${pr.number} 早就呈上了（分支与内容都和这次一致）—— 没有重复建，只把收尾重做了一遍`);
@@ -234,7 +259,11 @@ export async function openFolder(
       // **POST 报错 ≠ 折没建成。** 断网 / 超时 / 网关 5xx 时请求可能已经到了 GitHub；
       // 并发重试时另一边可能先建好了（422 "A pull request already exists"）。
       // 回头查一次：真有就认领，不报失败 —— 报失败会引人再呈一次（HARDENING F5）。
-      const found = await openPrForHead(ref, branch).catch(() => null);
+      const heads = await prsForHead(ref, branch, staged.headSha).catch(() => null);
+      const found = heads?.open ?? null;
+      // 没开着的、但有画可/已关的同名折（GitHub 可能回 422 "No commits between"）：
+      // 原样重试永远不会变，别报「重试安全」。
+      if (!found && heads?.ended) endedFolderFailure(branch, heads.ended);
       if (!found) {
         return fail({
           kind: 'worktree',
@@ -424,7 +453,7 @@ export interface ReplyInput {
 type ReviewComment = { id: number; in_reply_to_id?: number | null; body?: string; html_url?: string };
 
 /**
- * 这条串上是不是已经有一条一模一样的回话（HARDENING F7）。
+ * 这条串上、**他最后一条批注之后**，是不是已经有一条一模一样的回话（HARDENING F7）。
  * 超过一页（100 条）就放弃查重、返回 undefined —— 读侧在那个体量本来就明着失败，
  * 写侧不该因为「查不了重」把回话也一起堵死；其余失败（断网等）照常往外抛，**在写之前**。
  */
@@ -435,7 +464,15 @@ async function findSameReply(ref: RepoRef, pr: number, root: number, body: strin
       { owner: ref.owner, repo: ref.repo, pull_number: pr, per_page: 100 },
       { pageGuard: { kind: 'tooManyComments', repo: ref.slug, pr }, notFound: { kind: 'notFound', repo: ref.slug, pr } },
     );
-    return all.find((c) => c.in_reply_to_id === root && (c.body ?? '').trim() === body.trim()) ?? null;
+    // **只和他最后一条批注之后的回话比。**（评审 menxia-mcp#7 中危）
+    // 多轮批注里同一句话回两次是正常的（第一轮「采纳，已改。」，他又批，第二轮还是这句）；
+    // 查重防的只是「同一次发送的重试」，所以分界线 = 这条串上他最后说话的那一条。
+    // 他的话 = 根批注，以及串里没盖 `**回话**` 前缀的 reply。id 全仓单调递增，按 id 定先后。
+    const thread = all.filter((c) => c.in_reply_to_id === root);
+    const lastHis = thread
+      .filter((c) => !(c.body ?? '').trimStart().startsWith(REPLY_PREFIX))
+      .reduce((m, c) => Math.max(m, c.id), root);
+    return thread.find((c) => c.id > lastHis && (c.body ?? '').trim() === body.trim()) ?? null;
   } catch (e) {
     if (isFailure(e) && e.info.kind === 'tooManyComments') return undefined;
     throw e;

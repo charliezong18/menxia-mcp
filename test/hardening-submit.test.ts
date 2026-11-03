@@ -18,7 +18,7 @@ const ref = { owner: 'o', repo: 'r', slug: 'o/r' };
 const SID = 'cmszzzzzzzzzzzzzzzzzzzzzz';
 const deps = { detectSessionId: () => SID };
 
-interface Pr { number: number; html_url: string; head: { ref: string }; state: string; merged_at: null; body: string; title: string; labels: string[] }
+interface Pr { number: number; html_url: string; head: { ref: string; sha?: string }; state: string; merged_at: string | null; body: string; title: string; labels: string[] }
 interface Reply { id: number; in_reply_to_id: number; body: string; pull: number }
 
 /** 假 GitHub 的状态。每条测试前清空。 */
@@ -65,7 +65,9 @@ async function fakeGitHub(url: string | URL | Request, init?: RequestInit): Prom
     }
   } else if (method === 'GET' && path === '/repos/o/r/pulls') {
     const head = u.searchParams.get('head')?.split(':')[1];
-    res = json(200, gh.prs.filter((p) => p.state === (u.searchParams.get('state') ?? 'open') && (!head || p.head.ref === head)));
+    // 与真 GitHub 一致：state 缺省 = open；all = 不过滤（merged 的折 state 是 closed、merged_at 非空）。
+    const st = u.searchParams.get('state') ?? 'open';
+    res = json(200, gh.prs.filter((p) => (st === 'all' || p.state === st) && (!head || p.head.ref === head)));
   } else if (method === 'GET' && /^\/repos\/o\/r\/pulls\/\d+$/.test(path)) {
     const pr = gh.prs.find((p) => p.number === Number(path.split('/').pop()));
     res = pr ? json(200, pr) : json(200, { state: 'open', merged_at: null, body: '' });
@@ -240,6 +242,52 @@ describe('F5 · POST /pulls 报错但折其实建成了 → 认领，不报失�
   }, 60_000);
 });
 
+describe('F4′ · 同名分支的折已画可 / 已关 → 原样重呈要拒，不开第二折（评审 menxia-mcp#7 高危）', () => {
+  it.each([
+    ['merged', '2026-11-01T00:00:00Z', /画可/],
+    ['closed', null, /关闭/],
+  ] as const)('折已 %s、分支还留在远端 → 拒，零 POST /pulls，仍只有一折', async (_k, mergedAt, re) => {
+    const { origin, docs } = fixture(`f4p-${_k}`);
+    const first = await openFolder({ title: 't', body, docs }, ref, deps);
+    expect(first.outcome).toBe('created');
+    // 画可 / 关折：敕草仓 delete_branch_on_merge=false，分支留在远端。
+    gh.prs[0]!.state = 'closed';
+    gh.prs[0]!.merged_at = mergedAt;
+    const sha = git(origin, ['rev-parse', `f4p-${_k}`]);
+    gh.log = [];
+    const e = await openFolder({ title: 't', body, docs }, ref, deps).catch((x: unknown) => x);
+    const msg = String((e as Error).message);
+    expect(msg).toMatch(re);
+    expect(msg).toContain(`#${first.pr}`);
+    expect(msg).not.toContain('原样重试 open_folder');
+    expect(posts(/\/pulls$/)).toBe(0);
+    expect(gh.log.filter((l) => l.method !== 'GET')).toEqual([]);
+    expect(gh.prs).toHaveLength(1);
+    expect(git(origin, ['rev-parse', `f4p-${_k}`])).toBe(sha);
+  }, 60_000);
+
+  it('POST 失败后回查只查到已画可的折（GitHub 422 "No commits between"）→ 拒，不说「重试安全」', async () => {
+    const { docs } = fixture('f4p-422');
+    // 同名、已画可的折（head.sha 拿不到 → 保守算数）；这次 POST 被 GitHub 422 拒
+    gh.prs.push({ number: 77, html_url: 'https://github.com/o/r/pull/77', head: { ref: 'f4p-422' }, state: 'closed', merged_at: '2026-11-01T00:00:00Z', body: '', title: 't', labels: [] });
+    gh.faults.set('POST /repos/o/r/pulls', [422]);
+    const e = await openFolder({ title: 't', body, docs }, ref, deps).catch((x: unknown) => x);
+    expect(String((e as Error).message)).toContain('#77');
+    expect(String((e as Error).message)).not.toContain('不会开第二折');
+    expect(gh.prs).toHaveLength(1);
+  }, 60_000);
+
+  it('已关的旧折 head 不是远端现在这个 commit（关折删分支后同名重开）→ 不挡，照常续推建折', async () => {
+    const { docs } = fixture('f4p-reopen');
+    gh.prs.push({ number: 30, html_url: 'https://github.com/o/r/pull/30', head: { ref: 'f4p-reopen', sha: '0'.repeat(40) }, state: 'closed', merged_at: null, body: '', title: 'old', labels: [] });
+    gh.faults.set('POST /repos/o/r/pulls', ['fail']);
+    await openFolder({ title: 't', body, docs }, ref, deps).catch(() => null);
+    const out = await openFolder({ title: 't', body, docs }, ref, deps);
+    expect(out.outcome).toBe('resumed');
+    expect(gh.prs.filter((p) => p.state === 'open')).toHaveLength(1);
+  }, 60_000);
+});
+
 describe('F6 · 折建好了、label 没贴上 → 部分失败要报清楚，重试补齐', () => {
   it('label 那一步断网 → complete=false，incomplete 指名 labels 与补救；重试 → 补上，仍是一折', async () => {
     const { docs } = fixture('f6-labels');
@@ -307,6 +355,19 @@ describe('F7 · reply_comment 重试不发两条', () => {
     await replyComment({ pr: 12, commentId: 900, body: '采纳' }, ref);
     await replyComment({ pr: 12, commentId: 900, body: '再补一句' }, ref);
     expect(gh.replies).toHaveLength(2);
+  });
+
+  it('**多轮批注**：他在串里又说了一句之后，同一句回话照发（查重只看他最后一条之后）', async () => {
+    await replyComment({ pr: 12, commentId: 900, body: '采纳，已改。' }, ref);
+    // 他从网页在同一串里追了一句（没有 **回话** 前缀）
+    gh.replies.push({ id: 7000 + gh.replies.length, pull: 12, in_reply_to_id: 900, body: '这里还是不对，再改' });
+    const out = await replyComment({ pr: 12, commentId: 900, body: '采纳，已改。' }, ref) as { alreadyPosted?: boolean };
+    expect(out.alreadyPosted).toBeUndefined();
+    expect(posts(/replies$/)).toBe(2);
+    // 紧接着的重试仍然去重
+    const again = await replyComment({ pr: 12, commentId: 900, body: '采纳，已改。' }, ref) as { alreadyPosted?: boolean };
+    expect(again.alreadyPosted).toBe(true);
+    expect(posts(/replies$/)).toBe(2);
   });
 
   it('对 reply 的 reply 也查重：归位到根之后再比', async () => {
