@@ -17,7 +17,7 @@
 
 import { reviewRepo, reviewPath, type RepoRef } from './config.js';
 import { get, write } from './github.js';
-import { fail, ZhupiFailure } from './errors.js';
+import { fail, isFailure, ZhupiFailure } from './errors.js';
 import { buildBody, verifyMarker, MARKER_RE, SESSION_ID_RE, type FolderBody } from './body.js';
 import { detectSessionId } from './session.js';
 import { stageFolder, type Staged } from './worktree.js';
@@ -63,8 +63,27 @@ export interface OpenFolderInput {
   track?: TrackInput;
 }
 
+/** 折建好之后哪一步没做完。**折本身是好的**，这些只是收尾（HARDENING F6）。 */
+export interface IncompleteStep {
+  step: 'labels' | 'verifyMarker';
+  error: string;
+  /** 补救：原样重试 open_folder 即可（幂等），或者手动命令。 */
+  remedy: string;
+}
+
 export interface OpenFolderResult {
   pr: number;
+  /**
+   * 这一折是怎么来的（HARDENING F4/F5，加字段不改旧字段）：
+   *   · `created` —— 本次新建
+   *   · `resumed` —— 分支上次已推上去、建折没成；本次没再推，只补建了折
+   *   · `existing` —— 同一份内容的折早就开着（上次其实成功了，或者网络断在回包上）；
+   *     **没有重复建**，只把 label 等收尾重做了一遍
+   */
+  outcome: 'created' | 'resumed' | 'existing';
+  /** 收尾全部成功才是 true。false 时看 incomplete —— 原样重试 open_folder 会把它补齐，不会开第二折。 */
+  complete: boolean;
+  incomplete: IncompleteStep[];
   /** **主输出是这个。** github.com 的 PR 链接放在 prUrl，别当主输出 —— */
   desk: string;
   prUrl: string;
@@ -80,8 +99,57 @@ export interface OpenFolderResult {
  * 顺序：拼 body → 拿锁开 worktree → 拷 → commit → **lint 闸门** → push → 建 PR → 回读自核。
  * lint 在 push 之前，所以不合格时远端一片干净（SPEC §5.4 登记的刻意改进）。
  */
-export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRepo()): Promise<OpenFolderResult> {
-  if (!input.title?.trim()) return fail({ kind: 'badInput', what: 'title 不能空' });
+export interface OpenFolderDeps {
+  /** 测试接缝：会话 id 探测依赖进程树，在 CI 里恒为 null。 */
+  detectSessionId: () => string | null;
+}
+const OPEN_DEPS: OpenFolderDeps = { detectSessionId };
+
+/** GitHub 的上限：PR 标题 256 字符，body / 批注 65536 字符。超了会在 push 之后才 422。 */
+export const TITLE_MAX = 256;
+export const BODY_MAX = 65_536;
+
+/**
+ * 分支名能不能用。**在任何 git / 网络动作之前**判（HARDENING F8）。
+ *
+ * 上一版对 `branch` 一个字都不查：`-f` / `--force` 这类以 `-` 开头的名字会被 git 当成选项，
+ * `main` 会让折从 main 开到 main，带空格 / `..` / `~^:?*[\\` 的会在 worktree add 时
+ * 报一句看不出原因的「git worktree add 失败」。中文名照放（#31 那折 22 篇是中文名）。
+ */
+export function branchProblem(b: string): string | null {
+  if (!b) return '分支名为空（docs 第一篇的文件名推不出 slug？）';
+  if (b.startsWith('-')) return `分支名不能以 - 开头（会被 git 当成选项）：${JSON.stringify(b)}`;
+  if (b === 'main' || b === 'HEAD' || b === 'master') return `分支名不能是 ${b}`;
+  if (/[\s~^:?*\[\\\x00-\x1f\x7f]/.test(b)) return `分支名里有 git 不认的字符（空白 ~ ^ : ? * [ \\ 或控制字符）：${JSON.stringify(b)}`;
+  if (b.includes('..') || b.includes('@{') || b.includes('//')) return `分支名里不能有 .. / @{ / //：${JSON.stringify(b)}`;
+  if (/(^|\/)\./.test(b) || /\.lock$|\.$|\/$/.test(b)) return `分支名不能以 . 开头、以 . / .lock / / 结尾：${JSON.stringify(b)}`;
+  return null;
+}
+
+/**
+ * 这条分支上**开着的**折。拿来做幂等：重试时先认领，别开第二折。
+ * 只认 open —— 已画可 / 已关的同名分支是另一回事（stageFolder 那边会按「远端已存在」处理）。
+ */
+async function openPrForHead(ref: RepoRef, branch: string): Promise<{ number: number; html_url: string } | null> {
+  const list = await get<Array<{ number: number; html_url: string; state?: string; head?: { ref?: string } }>>(
+    'GET /repos/{owner}/{repo}/pulls',
+    { owner: ref.owner, repo: ref.repo, state: 'open', head: `${ref.owner}:${branch}`, per_page: 100 },
+    { pageGuard: { kind: 'tooManyFolders', repo: ref.slug } },
+  );
+  // head 过滤再在本地核一遍：不全信服务端的 query 解析（假 server / 代理未必认 head=）。
+  const hit = list.find((p) => p.head?.ref === branch && (p.state === undefined || p.state === 'open'));
+  return hit ? { number: hit.number, html_url: hit.html_url } : null;
+}
+
+export async function openFolder(
+  input: OpenFolderInput,
+  ref: RepoRef = reviewRepo(),
+  deps: OpenFolderDeps = OPEN_DEPS,
+): Promise<OpenFolderResult> {
+  if (typeof input.title !== 'string' || !input.title.trim()) return fail({ kind: 'badInput', what: 'title 不能空' });
+  if (input.title.length > TITLE_MAX) {
+    return fail({ kind: 'badInput', what: `title 太长（${input.title.length} 字符，GitHub 上限 ${TITLE_MAX}）—— 推上去之后才会被拒` });
+  }
   if (!Array.isArray(input.docs) || input.docs.length === 0) {
     return fail({ kind: 'badInput', what: 'docs 要给本机绝对路径，双语一对都要给' });
   }
@@ -91,10 +159,20 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
     }
   }
 
-  const sessionId = input.sessionId ?? detectSessionId();
   const branch = input.branch ?? slugOf(input.docs[0]!);
+  const bad = branchProblem(branch);
+  if (bad) return fail({ kind: 'badInput', what: bad, hint: '用 branch 入参显式给一个，或者给文档换个文件名。' });
+  if (typeof input.body !== 'object' || input.body === null) {
+    return fail({ kind: 'badInput', what: 'body 得是对象：{ destination, directLink, tldr, decisions, howto }' });
+  }
+
+  const sessionId = input.sessionId ?? deps.detectSessionId();
   // body 要在 lint 之前拼好 —— 规则里有查 body 的（五段缺项），它吃的是最终文本。
   const built = buildBody(input.body, sessionId, input.track ? buildRelMarker(input.track) : null);
+  // 超长 body 会让 POST /pulls 在**推完分支之后**才 422 —— 那是最难收拾的半成品。先拦。
+  if (built.text.length > BODY_MAX) {
+    return fail({ kind: 'badInput', what: `PR body 太长（${built.text.length} 字符，GitHub 上限 ${BODY_MAX}）—— 长内容写进文档，body 只放五段摘要` });
+  }
 
   let findings: Finding[] = [];
   const staged = await stageFolder(
@@ -107,7 +185,7 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
       message: input.title,
     },
     async (s: Staged) => {
-      findings = lint(collect({ worktree: s.worktree, ref: 'HEAD', base: 'origin/main', body: built.text, skipFetch: true }));
+      findings = lint(collect({ worktree: s.worktree, ref: s.ref ?? 'HEAD', base: 'origin/main', body: built.text, skipFetch: true }));
       if (hasHard(findings)) {
         // 这里抛 = 什么都不推。错误文本要能直接照着修（R6）。
         throw new ZhupiFailure({
@@ -121,38 +199,80 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
 
   // 分支推上去了。**从这里往后失败都要说清「折的分支已经在远端了」** ——
   // 不说的话调用方会以为整件事没发生，然后换个 slug 重来，留下一条孤儿分支。
-  let pr: { number: number; html_url: string };
-  try {
-    pr = await write<{ number: number; html_url: string }>('POST /repos/{owner}/{repo}/pulls', {
-      owner: ref.owner,
-      repo: ref.repo,
-      title: input.title,
-      head: branch,
-      base: 'main',
-      body: built.text,
-      // **不带 draft。** 2026-07-26 起弃用：私有单人仓里 draft 挡不住任何人，
-      // 却挡住「画可」按钮要的 squash merge。
+  const warnings = [...built.warnings];
+  let outcome: OpenFolderResult['outcome'] = staged.resumed ? 'resumed' : 'created';
+  let pr: { number: number; html_url: string } | null = null;
+
+  // 续推：上次可能其实已经建成了（POST 到了 GitHub、回包丢在路上）。先认领，别开第二折。
+  if (staged.resumed) {
+    pr = await openPrForHead(ref, branch).catch((e: unknown) => {
+      return fail({
+        kind: 'worktree',
+        what: `分支 ${branch} 已经推上去了，但查不了它有没有折：${String((e as Error)?.message ?? e)}`,
+        hint: '什么都没新建。网络好了原样重试 open_folder 即可 —— 它会先认领已有的折，不会重复建。别换 slug 重来（会留孤儿分支）。',
+      });
     });
-  } catch (e) {
-    return fail({
-      kind: 'worktree',
-      what: `分支 ${branch} 已经推上去了，但建折失败：${String((e as Error)?.message ?? e)}`,
-      hint: `别换 slug 重来（会留孤儿分支）。网络好了补一句：gh pr create -R ${ref.slug} --head ${branch} --title ${JSON.stringify(input.title)} --body-file <(...)`,
-    });
+    if (pr) {
+      outcome = 'existing';
+      warnings.push(`#${pr.number} 早就呈上了（分支与内容都和这次一致）—— 没有重复建，只把收尾重做了一遍`);
+    }
   }
 
-  const warnings = [...built.warnings];
+  if (!pr) {
+    try {
+      pr = await write<{ number: number; html_url: string }>('POST /repos/{owner}/{repo}/pulls', {
+        owner: ref.owner,
+        repo: ref.repo,
+        title: input.title,
+        head: branch,
+        base: 'main',
+        body: built.text,
+        // **不带 draft。** 2026-07-26 起弃用：私有单人仓里 draft 挡不住任何人，
+        // 却挡住「画可」按钮要的 squash merge。
+      });
+    } catch (e) {
+      // **POST 报错 ≠ 折没建成。** 断网 / 超时 / 网关 5xx 时请求可能已经到了 GitHub；
+      // 并发重试时另一边可能先建好了（422 "A pull request already exists"）。
+      // 回头查一次：真有就认领，不报失败 —— 报失败会引人再呈一次（HARDENING F5）。
+      const found = await openPrForHead(ref, branch).catch(() => null);
+      if (!found) {
+        return fail({
+          kind: 'worktree',
+          what: `分支 ${branch} 已经推上去了，但建折失败：${String((e as Error)?.message ?? e)}`,
+          hint: '别换 slug 重来（会留孤儿分支），也别手跑 gh 建折（绕开闸门）。' +
+            '网络好了**原样重试 open_folder**：它认得出这条分支是同一次呈折，只补建折、不会再推、不会开第二折。',
+        });
+      }
+      pr = found;
+      outcome = 'existing';
+      warnings.push(`建折请求报错（${String((e as Error)?.message ?? e).split('\n')[0]}），但 #${found.number} 其实已经建成了 —— 认领它，没有重复建`);
+    }
+  }
+
+  const incomplete: IncompleteStep[] = [];
   if (staged.fetchFailed) warnings.push('fetch origin 失败 —— 分支基点可能落后于最新 main');
   if (input.track) {
-    warnings.push(...(await applyTrackLabels(ref, pr.number, labelsFor(input.track), input.track.qian)));
+    const t = await applyTrackLabels(ref, pr.number, labelsFor(input.track), input.track.qian);
+    warnings.push(...t.warnings);
+    if (t.failed) incomplete.push(t.failed);
   } else {
     warnings.push('本折没带 track（proj/kind/wait）—— 门下分组会把它落到「未标注」，词表与规矩见 review #61');
   }
   const check = await verifyMarker(ref, pr.number, sessionId);
   if (!check.ok && check.message) warnings.push(check.message);
+  if (check.unverified) {
+    incomplete.push({
+      step: 'verifyMarker',
+      error: check.message ?? '回读失败',
+      remedy: `原样重试 open_folder（会认领 #${pr.number}，不会重复建），或用 read_comments(${pr.number}) 自己核标记`,
+    });
+  }
 
   return {
     pr: pr.number,
+    outcome,
+    complete: incomplete.length === 0,
+    incomplete,
     desk: deskUrl(pr.number),
     prUrl: pr.html_url,
     branch,
@@ -175,7 +295,12 @@ export async function openFolder(input: OpenFolderInput, ref: RepoRef = reviewRe
  * 但出一条 warning —— 与 track 缺失只警告不阻断同一个哲学。判据吃的是这里已经拉到的
  * 现有 label 清单；清单拉不到就退化成只对种子七签放行。
  */
-async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[], qian: string[] = []): Promise<string[]> {
+async function applyTrackLabels(
+  ref: RepoRef,
+  prNumber: number,
+  labels: string[],
+  qian: string[] = [],
+): Promise<{ warnings: string[]; failed: IncompleteStep | null }> {
   const warnings: string[] = [];
   let existingNames: string[] = [];
   try {
@@ -212,11 +337,20 @@ async function applyTrackLabels(ref: RepoRef, prNumber: number, labels: string[]
       issue_number: prNumber,
       labels,
     });
-    return warnings;
+    return { warnings, failed: null };
   } catch (e) {
     const cmd = labels.map((l) => `--add-label ${JSON.stringify(l)}`).join(' ');
-    warnings.push(`track 的 label 没贴上（折本身已建好）：${String((e as Error)?.message ?? e)}。补：gh pr edit ${prNumber} -R ${ref.slug} ${cmd}`);
-    return warnings;
+    const err = String((e as Error)?.message ?? e);
+    warnings.push(`track 的 label 没贴上（折本身已建好）：${err}。补：gh pr edit ${prNumber} -R ${ref.slug} ${cmd}`);
+    return {
+      warnings,
+      failed: {
+        step: 'labels',
+        error: err,
+        // 贴 label 是加法、幂等：重试 open_folder 会认领 #prNumber 再贴一次，不会开第二折。
+        remedy: `原样重试 open_folder（会认领 #${prNumber} 只补 label），或：gh pr edit ${prNumber} -R ${ref.slug} ${cmd}`,
+      },
+    };
   }
 }
 
@@ -287,8 +421,32 @@ export interface ReplyInput {
   body: string;
 }
 
+type ReviewComment = { id: number; in_reply_to_id?: number | null; body?: string; html_url?: string };
+
+/**
+ * 这条串上是不是已经有一条一模一样的回话（HARDENING F7）。
+ * 超过一页（100 条）就放弃查重、返回 undefined —— 读侧在那个体量本来就明着失败，
+ * 写侧不该因为「查不了重」把回话也一起堵死；其余失败（断网等）照常往外抛，**在写之前**。
+ */
+async function findSameReply(ref: RepoRef, pr: number, root: number, body: string): Promise<ReviewComment | null | undefined> {
+  try {
+    const all = await get<ReviewComment[]>(
+      'GET /repos/{owner}/{repo}/pulls/{pull_number}/comments',
+      { owner: ref.owner, repo: ref.repo, pull_number: pr, per_page: 100 },
+      { pageGuard: { kind: 'tooManyComments', repo: ref.slug, pr }, notFound: { kind: 'notFound', repo: ref.slug, pr } },
+    );
+    return all.find((c) => c.in_reply_to_id === root && (c.body ?? '').trim() === body.trim()) ?? null;
+  } catch (e) {
+    if (isFailure(e) && e.info.kind === 'tooManyComments') return undefined;
+    throw e;
+  }
+}
+
 export async function replyComment(input: ReplyInput, ref: RepoRef = reviewRepo()): Promise<unknown> {
-  if (!input.body?.trim()) return fail({ kind: 'badInput', what: 'body 不能空' });
+  if (typeof input.body !== 'string' || !input.body.trim()) return fail({ kind: 'badInput', what: 'body 不能空' });
+  if (input.body.length > BODY_MAX - REPLY_PREFIX.length - 2) {
+    return fail({ kind: 'badInput', what: `回话太长（${input.body.length} 字符，GitHub 上限 ${BODY_MAX}）—— 拆成几条，或者写进文档里` });
+  }
 
   // 已画可/已关的折不许动（guard-closed-folder 的那条，MCP 侧自己拦一遍）。
   // 2026-07-29 #23 实测：他说「批完了」时折已 merged，agent 照常改稿推分支回话，
@@ -312,20 +470,50 @@ export async function replyComment(input: ReplyInput, ref: RepoRef = reviewRepo(
   // （`anchor.js:165` 找不到 in_reply_to_id 对应的根就 `roots.push(orphan)`）——
   // 也就是一条没有引文、飘在外面的批注。不去赌，自己先查一次：非根就换成根。
   let commentId = input.commentId;
-  const c = await get<{ in_reply_to_id?: number | null }>(
+  const c = await get<{ in_reply_to_id?: number | null; pull_request_url?: string }>(
     'GET /repos/{owner}/{repo}/pulls/comments/{comment_id}',
     { owner: ref.owner, repo: ref.repo, comment_id: input.commentId },
     { pageGuard: { kind: 'unknown', detail: '单条批注不该分页' }, notFound: { kind: 'notFound', repo: ref.slug, pr: input.pr } },
   );
+  // 批注属于别的折：commentId 是全仓唯一的，pr 写错了 GitHub 会 404 或者落到不对的页面上。
+  // 在写之前说清楚是哪一个不对（HARDENING F10）。
+  const owning = /\/pulls\/(\d+)$/.exec(c.pull_request_url ?? '')?.[1];
+  if (owning !== undefined && Number(owning) !== input.pr) {
+    return fail({
+      kind: 'badInput',
+      what: `批注 ${input.commentId} 在 #${owning} 上，不在 #${input.pr} 上`,
+      hint: `pr 改成 ${owning}，或者从 read_comments(${input.pr}) 重新取 commentId。`,
+    });
+  }
   if (c.in_reply_to_id) commentId = c.in_reply_to_id;
 
-  return write('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
-    owner: ref.owner,
-    repo: ref.repo,
-    pull_number: input.pr,
-    comment_id: commentId,
-    body: withReplyPrefix(input.body),
-  });
+  // **幂等：同一句话不回两次。**（HARDENING F7）
+  // 上一次可能已经发出去了 —— 断网 / 超时时 POST 可能到了 GitHub、只是回包丢了，
+  // 调用方看到的是失败，自然会重试。重试就是同一串上两条一模一样的回话，他得读两遍。
+  const body = withReplyPrefix(input.body);
+  const before = await findSameReply(ref, input.pr, commentId, body);
+  if (before) return { ...before, alreadyPosted: true };
+
+  try {
+    return await write('POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies', {
+      owner: ref.owner,
+      repo: ref.repo,
+      pull_number: input.pr,
+      comment_id: commentId,
+      body,
+    });
+  } catch (e) {
+    // POST 报错 ≠ 没发出去。回头查一次：真发出去了就当成功（并说明），没有就明说重试是安全的。
+    if (!isFailure(e) || !['network', 'unknown', 'rateLimit'].includes(e.info.kind)) throw e;
+    const after = await findSameReply(ref, input.pr, commentId, body).catch(() => undefined);
+    if (after) return { ...after, alreadyPosted: true, recoveredFrom: e.message };
+    if (e.info.kind === 'rateLimit') throw e; // 限流：没到 GitHub 的处理层，原话（含等多久）最有用
+    return fail({
+      kind: 'network',
+      reason: e.info.kind === 'network' ? e.info.reason : e.message.split('\n')[0] ?? '',
+      hint: '回话没确认发出去。原样重试 reply_comment 是安全的 —— 它会先查重，不会发两条。',
+    });
+  }
 }
 
 // ── 巡检 ──

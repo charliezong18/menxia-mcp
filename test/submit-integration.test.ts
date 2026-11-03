@@ -66,6 +66,8 @@ beforeAll(async () => {
         return send(200, { ...prState, body: lastCreatedBody });
       }
       if (req.method === 'GET' && /^\/repos\/o\/r\/pulls\/comments\/\d+$/.test(url)) return send(200, commentMeta);
+      // reply_comment 写之前查重（HARDENING F7）要读整折的 review comments。
+      if (req.method === 'GET' && /^\/repos\/o\/r\/pulls\/\d+\/comments$/.test(url)) return send(200, []);
       if (req.method === 'POST' && /\/comments\/\d+\/replies$/.test(url)) return send(201, { id: 7 });
       return send(404, { message: 'Not Found' });
     })();
@@ -133,7 +135,9 @@ const writes = (): Seen[] => seen.filter((s) => s.method !== 'GET');
 describe('open_folder：整条链', () => {
   it('推分支 → 建折 → 回读自核，全程 agent 不碰敕草仓', async () => {
     const { origin, docs } = fixture();
-    const out = await openFolder({ title: '读物：demo', body: goodBody, docs }, ref);
+    // 会话探测靠进程树（要是 happy 的后代），CI / 云端容器里恒为 null —— 这条测试原先因此
+    // 只在作者机器上绿（HARDENING 基线里唯一的红）。探测本身由 session.test.ts 覆盖，这里注入。
+    const out = await openFolder({ title: '读物：demo', body: goodBody, docs }, ref, { detectSessionId: () => SID });
 
     expect(out.pr).toBe(42);
     // 主输出是门下深链（2026-07-27：给 GitHub 链接会被读成「让你发涂归你却发了个 PR」）

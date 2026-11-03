@@ -133,17 +133,61 @@ const baseUrlOpt = (): { baseUrl?: string } => {
   return { baseUrl: b };
 };
 
+// —— 传输层：超时 + 测试接缝（HARDENING-2026-11 F2）——
+//
+// 上一版没有任何请求超时：Octokit 走全局 fetch，对端只握手不回包（半开连接、代理吞包）时
+// **工具调用永远挂着**，模型那一侧看到的是「没反应」，而不是一句能照着修的话。
+// 现在每个请求都挂 `AbortSignal.timeout`，超时归为 network（见 classify）。
+
+type FetchLike = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+/** 每个 HTTP 请求的超时（毫秒）。env 可覆盖是测试接缝，同 `ZHUPI_GIT_TIMEOUT_MS`。 */
+export const httpTimeoutMs = (): number => Number(process.env.ZHUPI_HTTP_TIMEOUT_MS) || 30_000;
+/** GET 网络错误重试前等多久。测试里设成 0。 */
+const retryDelayMs = (): number => {
+  const v = process.env.ZHUPI_HTTP_RETRY_DELAY_MS;
+  return v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : 500;
+};
+
+let fetchOverride: FetchLike | null = null;
+
+/**
+ * 测试接缝：换掉底层 fetch。**只给测试用** —— 让「EADDRNOTAVAIL / 超时 / 发出去了但回包丢了」
+ * 这类网络故障能在不碰真网络的前提下逐个复现。传 null 复原。
+ * 闸门（只读 / 写白名单）挂在 Octokit hook 上，在 fetch 之前 —— 换 fetch 绕不过它们。
+ */
+export function setFetchForTests(f: FetchLike | null): void {
+  fetchOverride = f;
+  cachedClient = null;
+  cachedWriteClient = null;
+}
+
+function timedFetch(): FetchLike {
+  const base: FetchLike = fetchOverride ?? ((u, i) => globalThis.fetch(u, i));
+  return (url, init = {}) => {
+    const t = AbortSignal.timeout(httpTimeoutMs());
+    const signal = init.signal ? AbortSignal.any([init.signal, t]) : t;
+    return base(url, { ...init, signal });
+  };
+}
+
+const octokitOpts = async (force: boolean) => ({
+  auth: await authToken(force),
+  ...baseUrlOpt(),
+  request: { fetch: timedFetch() },
+});
+
 /** 实例绝不导出——外面拿不到它，就没法绕开上面那道 hook。 */
 async function client(force = false): Promise<Octokit> {
   if (!force && cachedClient) return cachedClient;
-  cachedClient = installReadOnlyGate(new Octokit({ auth: await authToken(force), ...baseUrlOpt() }));
+  cachedClient = installReadOnlyGate(new Octokit(await octokitOpts(force)));
   return cachedClient;
 }
 
 /** 写实例与读实例**分开缓存**：混用一个实例就只能挂一道闸，两边必然有一边被放松。 */
 async function writeClient(force = false): Promise<Octokit> {
   if (!force && cachedWriteClient) return cachedWriteClient;
-  cachedWriteClient = installWriteGate(new Octokit({ auth: await authToken(force), ...baseUrlOpt() }));
+  cachedWriteClient = installWriteGate(new Octokit(await octokitOpts(force)));
   return cachedWriteClient;
 }
 
@@ -173,9 +217,24 @@ const statusOf = (e: unknown): number | undefined => (e as { status?: number } |
 
 // undici（v21 底层）的措辞与 node:http 时代不同：连接中途被断是 "other side closed"，
 // 真正的 UND_ERR_SOCKET 藏在 cause 链第二层。评审用真 socket reset 打穿过 v2 的判定。
+//
+// 2026-11 加固（HARDENING F1/F2）：上一版漏了三类，全都落到「出了点没预料到的问题」——
+//   · EADDRNOTAVAIL / ENETUNREACH / EHOSTUNREACH / ENETDOWN / ECONNABORTED：本机没网卡地址、
+//     路由不通（笔记本睡醒、VPN 切换时的常态）。实测 EADDRNOTAVAIL 的 message 是
+//     `connect EADDRNOTAVAIL 140.82.x.x:443 - Local (0.0.0.0:0)`，不含上面任何一个词。
+//   · 超时：`AbortSignal.timeout` 抛的是 DOMException `TimeoutError`（Octokit 包成 500），
+//     `AbortError` 则原样透出；undici 自己的 UND_ERR_*_TIMEOUT 也算。
+//   · 502/503/504：GitHub 网关抖动。不是认证问题，也不是入参问题。
 const NETWORKISH =
-  /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EPIPE|fetch failed|socket hang up|other side closed|terminated|network/i;
-const NET_CODES = ['ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'UND_ERR_SOCKET'];
+  /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|EPIPE|EADDRNOTAVAIL|ENETUNREACH|EHOSTUNREACH|ENETDOWN|ECONNABORTED|fetch failed|socket hang up|other side closed|terminated|network|timed? ?out|aborted due to timeout|operation was aborted/i;
+const NET_CODES = [
+  'ENOTFOUND', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'EPIPE', 'UND_ERR_SOCKET',
+  'EADDRNOTAVAIL', 'ENETUNREACH', 'EHOSTUNREACH', 'ENETDOWN', 'ECONNABORTED',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
+];
+const NET_NAMES = ['TimeoutError', 'AbortError'];
+/** 网关类 5xx：请求**可能**已经到了 GitHub，也可能没有 —— 与断网同一类「结果未知」。 */
+const GATEWAY = [502, 503, 504];
 
 /** 沿 cause 链往下找，不只看一层。 */
 function chain(e: unknown, depth = 4): unknown[] {
@@ -192,6 +251,7 @@ function isNetworkish(e: unknown): boolean {
   for (const link of chain(e)) {
     const code = String((link as { code?: string } | null)?.code ?? '');
     if (NET_CODES.includes(code)) return true;
+    if (NET_NAMES.includes(String((link as { name?: string } | null)?.name ?? ''))) return true;
     if (NETWORKISH.test(String((link as Error)?.message ?? ''))) return true;
   }
   return false;
@@ -223,6 +283,8 @@ function isRateLimited(e: unknown): number | null {
  */
 export function classify(e: unknown, opts: { notFound?: ZhupiError } = {}): ZhupiError {
   if (isNetworkish(e)) return { kind: 'network', reason: String((e as Error).message ?? e) };
+  const gw = statusOf(e);
+  if (gw !== undefined && GATEWAY.includes(gw)) return { kind: 'network', reason: `GitHub 返回 HTTP ${gw}（网关暂时不可用）` };
   const retry = isRateLimited(e);
   if (retry !== null) return { kind: 'rateLimit', retryAfterSec: retry || undefined };
   const st = statusOf(e);
@@ -247,9 +309,13 @@ export async function get<T = unknown>(
     return fail({ kind: 'badInput', what: `route 必须以 GET 开头：${route}` });
   }
   const safe = sanitizeParams(params);
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  // 401 与网络错误各有**一次**重试额度，互不占用。GET 无副作用，重试网络错误是无害的
+  // （HARDENING F3：上一版注释说「get() 重试网络错误」，代码其实一次都没重试过）。
+  let authRetried = false;
+  let netRetried = false;
+  for (;;) {
     try {
-      const oc = await client(attempt > 0);
+      const oc = await client();
       const res = await oc.request(route, safe);
       const link = String((res.headers as Record<string, unknown>).link ?? '');
       if (/rel="next"/.test(link)) return fail(opts.pageGuard);
@@ -258,14 +324,21 @@ export async function get<T = unknown>(
       // 自己抛的分类错误直接放行——v1 在这里把它重新包成「没预料到的问题」，
       // 结果全新装机最常见的失败路径（gh 没装/没登录）返回的是一句废话（评审实证）。
       if (isFailure(e)) throw e;
-      if (statusOf(e) === 401 && attempt === 0) {
+      if (statusOf(e) === 401 && !authRetried) {
+        authRetried = true;
         resetAuthCache();
         continue;
       }
-      return fail(classify(e, { notFound: opts.notFound }));
+      const c = classify(e, { notFound: opts.notFound });
+      if (c.kind === 'network' && !netRetried) {
+        netRetried = true;
+        const d = retryDelayMs();
+        if (d > 0) await new Promise((r) => { setTimeout(r, d); });
+        continue;
+      }
+      return fail(c);
     }
   }
-  return fail({ kind: 'auth', why: 'expired' });
 }
 
 export interface WriteOptions {

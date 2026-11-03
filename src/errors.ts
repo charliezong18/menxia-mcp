@@ -8,7 +8,7 @@ export type ZhupiError =
   | { kind: 'rateLimit'; retryAfterSec?: number }
   | { kind: 'repo'; repo: string }
   | { kind: 'notFound'; repo: string; pr: number }
-  | { kind: 'network'; reason: string }
+  | { kind: 'network'; reason: string; hint?: string }
   | { kind: 'badInput'; what: string; hint?: string }
   | { kind: 'tooManyComments'; repo: string; pr: number }
   | { kind: 'tooManyFolders'; repo: string }
@@ -64,7 +64,8 @@ function raw(e: ZhupiError): string {
       return `${e.repo} 里没有 #${e.pr}。用 list_folders 看现有折号。`;
     case 'network': {
       const why = brief(e.reason);
-      return `连不上 github.com${why ? `：${why}` : ''}。网络恢复后重试。`;
+      // hint 不截断：写侧要在这里说清「重试安不安全」（HARDENING F5/F7），砍掉就白说了。
+      return `连不上 github.com${why ? `：${why}` : ''}。网络恢复后重试。${e.hint ? `\n${e.hint}` : ''}`;
     }
     case 'badInput':
       // what 可能是多行的（体例 findings 逐条列出来），**不能用 brief 砍成一行** ——

@@ -83,10 +83,40 @@ const CJK = /[぀-ヿ㐀-䶿一-鿿豈-﫿가-힯]/g;
  * 空白、标点、数字、markdown 记号都不算，否则一篇短中文文档会因为标点多而掉到阈值下。
  */
 export function cjkRatio(md: string): number {
-  const prose = stripCode(md);
+  const prose = proseOf(md);
   const meaningful = prose.replace(/[\s\d\p{P}\p{S}]/gu, '');
   if (meaningful.length === 0) return 0;
   return (prose.match(CJK)?.length ?? 0) / meaningful.length;
+}
+
+/**
+ * 算语言占比用的「正文」：剥代码跨度、**绝对 URL 的链接目标、裸 URL、HTML 标签**（HARDENING L3）。
+ *
+ * 上一版只剥代码。于是一篇中文版里每条 `[说明](https://github.com/charliezong18/review/pull/61)`
+ * 都往分母里塞几十个拉丁字母 —— 链接多的短中文文档（索引页、回顾页）被报成「中文版但中日韩字符
+ * 只占 20%」，而读者看到的明明全是中文。链接文字（`[说明]` 那半）保留：那是读者真看得到的。
+ * 相对目标（`a.md`、`assets/p.png`）照旧计入 —— 它们短，剥不剥对判定几乎没影响，
+ * 而保持原样能让既有的边界样本不漂移。
+ */
+function proseOf(md: string): string {
+  return stripCode(md)
+    .replace(/\]\(\s*<?https?:\/\/[^)]*\)/gi, ']')
+    .replace(/^\s{0,3}\[[^\]]+\]:\s*<?https?:\/\/.*$/gim, '')
+    .replace(/<[^>\n]+>/g, ' ')
+    .replace(/\bhttps?:\/\/\S+/gi, ' ');
+}
+
+/**
+ * 有没有可以判语言的正文（HARDENING L2）。只有图、只有代码的文档判不了 —— 不判，比报一个
+ * 「中文版但中日韩字符只占 17%」诚实（那 17% 全来自体例强制的互链头）。
+ * 判「有没有」时**不算首行互链头、不算图片语法**（alt 文字和路径都不是正文）；
+ * 占比本身照旧按 `cjkRatio` 算，不动既有的边界样本。
+ */
+export function hasProse(md: string): boolean {
+  const lines = md.replace(/^\uFEFF/, '').split('\n');
+  const body = /\]\([^)]*\.md\)/.test(lines[0] ?? '') ? lines.slice(1).join('\n') : lines.join('\n');
+  return proseOf(body.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/<img\b[^>]*>/gi, ' '))
+    .replace(/[\s\d\p{P}\p{S}]/gu, '').length > 0;
 }
 
 /**
@@ -108,7 +138,9 @@ export function assetRefs(md: string): string[] {
   // markdown 链接/图片语法。用 `[^)]+` 而不是 `[^)\s]+` —— 后者让
   // **文件名带空格的断图静默漏报**（老脚本用 `[^)]+`，能报；第一轮评审实测）。
   // 代价是要自己剥掉 title（`![x](assets/a.png "说明")`）和锚点。
-  for (const m of prose.matchAll(/\]\(((?:\.{1,2}\/)*assets\/[^)]+)\)/g)) out.add(cleanRef(m[1]!));
+  // `<…>` 包起来的目标（CommonMark 允许，文件名带空格时的正规写法）也要认 ——
+  // 上一版要求 `](` 后面紧跟 assets/，`![x](<assets/a b.png>)` 整条不被提取，断图漏报（HARDENING L4）。
+  for (const m of prose.matchAll(/\]\(<?((?:\.{1,2}\/)*assets\/[^)>]+)>?[^)]*\)/g)) out.add(cleanRef(m[1]!));
   // 引用式链接定义：`[p]: assets/a.png`
   // 取到**行尾**再收拾，不用 `\S+` —— 那正是上一条刚修掉的空格文件名 bug，
   // 我在新加的这个分支里又种了一遍（第二轮评审抓到）。
@@ -131,7 +163,9 @@ function cleanRef(ref: string): string {
   // **不剥 `#`。** 上一版无条件剥，于是磁盘上真叫 `plan#2.png` 的图变成假断图 ——
   // 老脚本放行、新版判硬伤，而这个行为改变没登记进刻意改进表（第二轮评审）。
   // markdown 里给图片路径加锚点本来就没意义，不值得为它误伤真文件名。
-  let r = ref.trim().replace(/\s+["'].*$/, '').trim();
+  let r = ref.trim().replace(/^<|>$/g, '').replace(/\s+["'].*$/, '').trim();
+  // `?raw=true` 之类的查询串不是文件名的一部分（GitHub 上常见的写法），剥掉再比（HARDENING L4）。
+  r = r.replace(/\?[^/]*$/, '');
   try {
     r = decodeURIComponent(r);
   } catch {
@@ -187,7 +221,17 @@ export function lint(snap: Snapshot): Finding[] {
     push(7, 'warn', f, `${f} 已在 main 上 —— 若不是本折要修订的，说明分支切错了地方`);
   }
 
-  for (const slug of slugsOf(snap.changed)) {
+  // ── 规则 1′：译本后缀大小写（HARDENING L1）──
+  // menxia `lang.js:6` 认 `/\.zh-CN\.md$/i`，但这里与 snapshot 一律按 `.zh-CN.md` 逐字匹配。
+  // 于是 `a.zh-cn.md` 在门下是 a.md 的中文版，在这里却被当成一篇**独立的英文文档**
+  // `a.zh-cn`，报「缺中文版 a.zh-cn.zh-CN.md」—— 指错方向。直说是后缀写法的问题。
+  const misCased = snap.changed.filter((f) => /\.zh-cn\.md$/i.test(f) && !f.endsWith('.zh-CN.md'));
+  for (const f of misCased) {
+    const base = f.slice(f.lastIndexOf('/') + 1);
+    push(1, 'hard', base, `${base} 的译本后缀要写成 .zh-CN.md（大小写一致），现在会被当成一篇独立文档`);
+  }
+
+  for (const slug of slugsOf(snap.changed.filter((f) => !misCased.includes(f)))) {
     const en = `${slug}.md`;
     const zh = `${slug}.zh-CN.md`;
     const base = slug.split('/').pop()!;
@@ -239,10 +283,10 @@ export function lint(snap: Snapshot): Finding[] {
     // 而规则 5 会说「英文版里 CJK 占 100%」。中文版那一侧照查（它是给他读的译本）。
     const enRatio = cjkRatio(enBody);
     const zhRatio = cjkRatio(zhBody);
-    if (!payload && enRatio > CJK_RATIO) {
+    if (!payload && hasProse(enBody) && enRatio > CJK_RATIO) {
       push(5, 'warn', en, `${en} 是英文版但中日韩字符占 ${pct(enRatio)}（阈值 ${pct(CJK_RATIO)}）—— 可能双语放反了或漏译`);
     }
-    if (zhRatio < CJK_RATIO) {
+    if (hasProse(zhBody) && zhRatio < CJK_RATIO) {
       push(5, 'warn', zh, `${zh} 是中文版但中日韩字符只占 ${pct(zhRatio)}（阈值 ${pct(CJK_RATIO)}）—— 可能双语放反了或漏译`);
     }
   }
