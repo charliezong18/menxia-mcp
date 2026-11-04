@@ -282,11 +282,21 @@ export interface Staged {
   branch: string;
   /** 仓内相对路径，如 `docs/foo.md` / `docs/assets/p.png`。 */
   copied: string[];
+  /**
+   * lint 要对着哪个 ref 跑。缺省 = `HEAD`（新开的临时 worktree）。
+   * 续推（`resumed`）时没有临时 worktree，lint 对着 `origin/<branch>` 跑。
+   */
+  ref?: string;
 }
 
 export interface StageResult extends Staged {
   headSha: string;
   fetchFailed: boolean;
+  /**
+   * **续上了上一次推到一半的呈折**（HARDENING F4）：远端分支已经在，且内容与这次要推的
+   * 逐字节相同 —— 什么都没再推，直接交给调用方去建折 / 认领已有的折。
+   */
+  resumed: boolean;
 }
 
 export interface StageOpts extends LockOpts {
@@ -458,9 +468,30 @@ export async function stageFolder(
     const localHas = refExists(repo, `refs/heads/${req.branch}`);
     const remoteHas = refExists(repo, `refs/remotes/origin/${req.branch}`);
     if (remoteHas) {
+      // **原样重试要能续上。**（HARDENING-2026-11 F4）
+      // 最常见的来路：上一次 push 成功、建折那一步撞上断网 / 超时。上一版在这里一律报错，
+      // 提示人去手跑 `gh pr create` —— 而那条命令正是 PreToolUse 守卫拦的东西，
+      // 于是唯一出口要么被拦、要么绕开全部闸门。现在：远端分支的内容与这次要推的
+      // **逐字节一致**（同一批文件、同样的 blob），就判定为「同一次呈折的重试」，
+      // 不再推、不换 slug，lint 对着远端分支重跑一遍，交给调用方去建折或认领已有的折。
+      // 内容不一致（想出 v2、或撞了别人的同名分支）照旧报错 —— 那不是重试。
+      const match = remoteMatches(repo, req, base);
+      if (match.ok) {
+        const ref = `origin/${req.branch}`;
+        await lint({ worktree: repo, branch: req.branch, copied: match.rels, ref });
+        return {
+          worktree: repo,
+          branch: req.branch,
+          copied: match.rels,
+          ref,
+          headSha: git(repo, ['rev-parse', ref]),
+          fetchFailed,
+          resumed: true,
+        };
+      }
       return fail({
         kind: 'worktree',
-        what: `分支 ${req.branch} 在远端已经存在`,
+        what: `分支 ${req.branch} 在远端已经存在，且内容与这次要呈的不一样（${match.why}）`,
         hint: '重复呈折是真事故（同一篇被呈两次，他会看到两折）。先用 list_folders 看是不是已经有这一折：' +
           '有就去那条分支上推新版本；没有折只有分支的话，是上次建折失败留下的孤儿，直接对它建折别重推。',
       });
@@ -537,7 +568,7 @@ export async function stageFolder(
         return fail({ kind: 'worktree', what: `git push 失败（分支 ${req.branch}）`, hint: '网络或权限。本地分支留着了，网络好了可以手推。' });
       }
       pushed = true;
-      return { worktree: wt, branch: req.branch, copied, headSha: git(wt, ['rev-parse', 'HEAD']), fetchFailed };
+      return { worktree: wt, branch: req.branch, copied, headSha: git(wt, ['rev-parse', 'HEAD']), fetchFailed, resumed: false };
     } finally {
       // worktree 一律收掉。**分支只在没推上去时删** —— 推上去了就是一折真敕草，
       // 本地分支留着，后面出 v2 还要往它上面推。
@@ -546,6 +577,46 @@ export async function stageFolder(
       if (!pushed) tryGit(repo, ['branch', '-D', req.branch]);
     }
   }, opts);
+}
+
+/**
+ * 远端分支是不是「这一次呈折」推上去的那份。判据（全部成立才算）：
+ *   ① 要拷的每个文件，`git hash-object <src>` 与 `origin/<branch>:<rel>` 的 blob 一致；
+ *   ② 分支相对基线改动过的文件集合 = 要拷的文件集合（`docs/.monolingual` 除外 ——
+ *      登记表是追加出来的，内容随 main 变，不拿它判）。
+ * 多一个、少一个、任何一个字节不同，都不是重试。
+ */
+export function remoteMatches(
+  repo: string,
+  req: Pick<StageRequest, 'docs' | 'assets' | 'facts' | 'branch'>,
+  base = 'origin/main',
+): { ok: true; rels: string[] } | { ok: false; why: string } {
+  const remote = `origin/${req.branch}`;
+  const pairs: Array<[string, string]> = [
+    ...req.docs.map((s): [string, string] => [s, `docs/${basename(s)}`]),
+    ...(req.assets ?? []).map((s): [string, string] => [s, assetTarget(s)]),
+  ];
+  for (const s of req.facts ?? []) {
+    try {
+      pairs.push([s, factsTarget(s)]);
+    } catch {
+      return { ok: false, why: `facts 路径不合规：${s}` };
+    }
+  }
+  for (const [src, rel] of pairs) {
+    if (!existsSync(src)) return { ok: false, why: `读不到 ${src}` };
+    const want = tryGit(repo, ['hash-object', '--', src]);
+    const have = tryGit(repo, ['rev-parse', '--verify', '--quiet', `${remote}:${rel}`]);
+    if (have === null) return { ok: false, why: `远端分支上没有 ${rel}` };
+    if (want !== have) return { ok: false, why: `${rel} 的内容不同` };
+  }
+  const rels = pairs.map(([, r]) => r);
+  const diff = tryGit(repo, ['diff', '--name-only', `${base}...${remote}`]);
+  if (diff === null) return { ok: false, why: `算不出 ${remote} 相对 ${base} 的改动` };
+  const changed = diff.split('\n').map((l) => l.trim()).filter((l) => l && l !== 'docs/.monolingual');
+  const extra = changed.filter((f) => !rels.includes(f));
+  if (extra.length > 0) return { ok: false, why: `远端分支上还有别的改动：${extra.slice(0, 5).join(', ')}` };
+  return { ok: true, rels };
 }
 
 /** 中止路径也要能把残骸收掉 —— 给验收脚本和疤痕测试用。 */
